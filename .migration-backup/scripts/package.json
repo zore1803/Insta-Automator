@@ -1,0 +1,17 @@
+{
+  "name": "@workspace/scripts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "hello": "tsx ./src/hello.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@types/node": "^25.3.3",
+    "drizzle-orm": "^0.45.2",
+    "openai": "^4.86.1",
+    "tsx": "^4.21.0"
+  }
+}

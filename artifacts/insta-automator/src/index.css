@@ -1,0 +1,236 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+  --font-sans: var(--app-font-sans);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: 220 15% 7%;
+  --foreground: 0 0% 95%;
+  --border: 220 10% 13%;
+  --input: 220 10% 13%;
+  --ring: 330 85% 60%;
+
+  --card: 220 14% 9%;
+  --card-foreground: 0 0% 95%;
+
+  --popover: 220 14% 9%;
+  --popover-foreground: 0 0% 95%;
+
+  --primary: 330 85% 60%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 10% 15%;
+  --secondary-foreground: 0 0% 80%;
+
+  --muted: 220 10% 12%;
+  --muted-foreground: 220 8% 50%;
+
+  --accent: 270 70% 55%;
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 0 75% 55%;
+  --destructive-foreground: 0 0% 100%;
+
+  --sidebar: 220 16% 6%;
+  --sidebar-foreground: 0 0% 90%;
+  --sidebar-border: 220 10% 10%;
+  --sidebar-primary: 330 85% 60%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 220 14% 11%;
+  --sidebar-accent-foreground: 0 0% 80%;
+  --sidebar-ring: 330 85% 60%;
+
+  --app-font-sans: 'Inter', system-ui, sans-serif;
+  --radius: 0.875rem;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: hsl(var(--border));
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--app-font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-image:
+      radial-gradient(ellipse at 10% 0%, hsla(270, 70%, 30%, 0.15) 0px, transparent 60%),
+      radial-gradient(ellipse at 90% 100%, hsla(330, 85%, 30%, 0.12) 0px, transparent 60%);
+    background-attachment: fixed;
+  }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 2px; }
+}
+
+/* ── Reusable component classes (no @apply of custom classes) ── */
+
+.ig-gradient {
+  background: linear-gradient(135deg, #833AB4, #FD1D1D, #FCB045);
+}
+
+.ig-text {
+  background: linear-gradient(135deg, #833AB4, #FD1D1D, #FCB045);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.card-glass {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-glass:hover {
+  border-color: hsl(330 85% 60% / 0.25);
+  box-shadow: 0 0 0 1px hsl(330 85% 60% / 0.08), 0 8px 32px -8px hsl(330 85% 60% / 0.15);
+}
+
+.post-card {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.post-card:hover {
+  border-color: hsl(330 85% 60% / 0.25);
+  box-shadow: 0 0 0 1px hsl(330 85% 60% / 0.08), 0 8px 32px -8px hsl(330 85% 60% / 0.15);
+}
+
+.stat-card {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 1rem;
+  padding: 1.25rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sidebar-nav-item.active {
+  background-color: hsl(330 85% 60% / 0.12);
+  color: hsl(330 85% 60%);
+  border: 1px solid hsl(330 85% 60% / 0.2);
+}
+
+.sidebar-nav-item:not(.active) {
+  color: hsl(var(--muted-foreground));
+  border: 1px solid transparent;
+}
+
+.sidebar-nav-item:not(.active):hover {
+  background-color: hsl(var(--sidebar-accent));
+  color: hsl(var(--sidebar-foreground));
+  border-color: hsl(var(--sidebar-border));
+}
+
+/* Badge variants */
+.badge-pending {
+  background-color: hsl(45 100% 50% / 0.15);
+  color: hsl(45 100% 65%);
+  border-color: hsl(45 100% 50% / 0.25);
+}
+
+.badge-approved {
+  background-color: hsl(142 70% 45% / 0.15);
+  color: hsl(142 70% 60%);
+  border-color: hsl(142 70% 45% / 0.25);
+}
+
+.badge-posted {
+  background-color: hsl(217 91% 60% / 0.15);
+  color: hsl(217 91% 70%);
+  border-color: hsl(217 91% 60% / 0.25);
+}
+
+.badge-rejected {
+  background-color: hsl(0 72% 51% / 0.15);
+  color: hsl(0 72% 70%);
+  border-color: hsl(0 72% 51% / 0.25);
+}
+
+/* Skeleton loader */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.skeleton {
+  background-color: hsl(var(--muted));
+  border-radius: var(--radius);
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, hsl(var(--card) / 0.5), transparent);
+  animation: shimmer 1.5s infinite;
+}
+
+/* Fade up animation */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-up {
+  animation: fadeUp 0.4s ease forwards;
+}

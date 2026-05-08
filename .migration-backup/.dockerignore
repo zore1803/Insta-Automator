@@ -1,0 +1,9 @@
+node_modules
+dist
+artifacts
+.git
+.env
+*.log
+.next
+.vercel
+tmp

@@ -1,0 +1,517 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: posts
+    description: Instagram post management
+  - name: config
+    description: App configuration
+  - name: stats
+    description: Dashboard statistics
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /posts:
+    get:
+      operationId: listPosts
+      tags: [posts]
+      summary: List all posts
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, rejected, posted, failed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of posts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostListResponse"
+
+  /posts/today:
+    get:
+      operationId: getTodaysPosts
+      tags: [posts]
+      summary: Get today's scheduled posts
+      responses:
+        "200":
+          description: Today's posts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostListResponse"
+
+  /posts/generate:
+    post:
+      operationId: generatePost
+      tags: [posts]
+      summary: Manually trigger content generation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum: [image, reels, carousel]
+                  default: image
+                imageSource:
+                  type: string
+                  enum: [ai, search]
+      responses:
+        "200":
+          description: Generated post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /posts/{id}:
+    get:
+      operationId: getPost
+      tags: [posts]
+      summary: Get a single post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Post details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+    patch:
+      operationId: updatePost
+      tags: [posts]
+      summary: Update a post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                caption:
+                  type: string
+                hashtags:
+                  type: string
+                status:
+                  type: string
+                  enum: [pending, approved, rejected, posted]
+      responses:
+        "200":
+          description: Updated post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /posts/{id}/publish:
+    post:
+      operationId: publishPost
+      tags: [posts]
+      summary: Publish a post to Instagram
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Published post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /posts/{id}/approve:
+    post:
+      operationId: approvePost
+      tags: [posts]
+      summary: Approve a pending post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Approved post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /posts/{id}/reject:
+    post:
+      operationId: rejectPost
+      tags: [posts]
+      summary: Reject a pending post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Rejected post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /posts/{id}/retry:
+    post:
+      operationId: retryPost
+      tags: [posts]
+      summary: Retry publishing a failed post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Retried post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+
+  /config:
+    get:
+      operationId: getConfig
+      tags: [config]
+      summary: Get the current configuration
+      responses:
+        "200":
+          description: Current configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppConfig"
+    put:
+      operationId: updateConfig
+      tags: [config]
+      summary: Update configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                niche:
+                  type: string
+                morningPostTime:
+                  type: string
+                afternoonPostTime:
+                  type: string
+                eveningPostTime:
+                  type: string
+                nightPostTime:
+                  type: string
+                lateNightPostTime:
+                  type: string
+                midnightPostTime:
+                  type: string
+                language:
+                  type: string
+                autoApprove:
+                  type: boolean
+                instagramAccountId:
+                  type: string
+                metaAccessToken:
+                  type: string
+                imageSource:
+                  type: string
+                  enum: [ai, search]
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppConfig"
+
+  /config/exchange-token:
+    post:
+      operationId: exchangeToken
+      tags: [config]
+      summary: Exchange short-lived Meta token for long-lived token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                shortLivedToken:
+                  type: string
+                appId:
+                  type: string
+                appSecret:
+                  type: string
+              required:
+                - shortLivedToken
+      responses:
+        "200":
+          description: Token exchange result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenExchangeResult"
+
+  /config/meta-login:
+    post:
+      operationId: metaLogin
+      tags: [config]
+      summary: Save Meta access token from Facebook JS SDK login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                accessToken:
+                  type: string
+              required:
+                - accessToken
+      responses:
+        "200":
+          description: Login result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenExchangeResult"
+
+  /stats:
+    get:
+      operationId: getStats
+      tags: [stats]
+      summary: Get dashboard statistics
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Post:
+      type: object
+      properties:
+        id:
+          type: integer
+        caption:
+          type: string
+        hashtags:
+          type: string
+        imageUrl:
+          type: string
+        videoUrl:
+          type: string
+          nullable: true
+        mediaType:
+          type: string
+          enum: [image, reels, carousel]
+          default: image
+        mediaUrls:
+          type: array
+          items:
+            type: string
+          nullable: true
+        imagePrompt:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected, posted, failed]
+        publishError:
+          type: string
+          nullable: true
+        scheduledFor:
+          type: string
+          format: date-time
+        postedAt:
+          type: string
+          format: date-time
+          nullable: true
+        instagramPostId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - caption
+        - hashtags
+        - imageUrl
+        - mediaType
+        - imagePrompt
+        - status
+        - scheduledFor
+        - createdAt
+        - updatedAt
+
+    PostListResponse:
+      type: object
+      properties:
+        posts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Post"
+        total:
+          type: integer
+      required:
+        - posts
+        - total
+
+    AppConfig:
+      type: object
+      properties:
+        niche:
+          type: string
+        morningPostTime:
+          type: string
+        afternoonPostTime:
+          type: string
+        eveningPostTime:
+          type: string
+        nightPostTime:
+          type: string
+        lateNightPostTime:
+          type: string
+        midnightPostTime:
+          type: string
+        language:
+          type: string
+        autoApprove:
+          type: boolean
+        instagramAccountId:
+          type: string
+        metaAccessToken:
+          type: string
+        imageSource:
+          type: string
+          enum: [ai, search]
+          default: ai
+      required:
+        - niche
+        - morningPostTime
+        - afternoonPostTime
+        - eveningPostTime
+        - nightPostTime
+        - lateNightPostTime
+        - midnightPostTime
+        - language
+        - autoApprove
+        - instagramAccountId
+        - metaAccessToken
+        - imageSource
+
+    DashboardStats:
+      type: object
+      properties:
+        totalPosted:
+          type: integer
+        totalPending:
+          type: integer
+        totalApproved:
+          type: integer
+        totalRejected:
+          type: integer
+        postsThisWeek:
+          type: integer
+        postsThisMonth:
+          type: integer
+        autoApproveEnabled:
+          type: boolean
+        nextScheduledPost:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - totalPosted
+        - totalPending
+        - totalApproved
+        - totalRejected
+        - postsThisWeek
+        - postsThisMonth
+        - autoApproveEnabled
+
+    TokenExchangeResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        instagramAccountId:
+          type: string
+          nullable: true
+        tokenType:
+          type: string
+      required:
+        - success
+        - message
