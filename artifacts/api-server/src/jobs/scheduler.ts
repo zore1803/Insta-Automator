@@ -3,19 +3,11 @@ import { generateInstagramContent } from "../services/claudeService.js";
 import { generatePostImage } from "../services/imageService.js";
 import { generateReelVideo } from "../services/videoService.js";
 import { publishPost, PublishError } from "../services/publishService.js";
+import { getOneTrendingTopic } from "../services/trendingService.js";
 import { logger } from "../lib/logger.js";
 
 const CLAIM_SENTINEL = "__publishing__";
 const STALE_CLAIM_MINUTES = 10;
-
-// ─── Best Instagram Posting Times (research-backed for maximum reach) ──────────
-// Based on global Instagram engagement data:
-// 6 AM  → Early risers / motivation seekers (first scroll of the day)
-// 9 AM  → Morning commute / work startup  
-// 12 PM → Lunch break (highest mid-day engagement)
-// 15:00 → Afternoon slump (people need motivation)
-// 18:00 → After work scroll (commute home)
-// 21:00 → Prime time — HIGHEST overall engagement on Instagram
 
 function parseTime(t: string): { h: number; m: number } {
   const [h, m] = (t || "00:00").split(":").map(Number);
@@ -30,10 +22,7 @@ function isNow(timeStr: string, toleranceMinutes = 1): boolean {
   return diff <= toleranceMinutes;
 }
 
-// Smart content mix for maximum algorithm performance:
-// Carousel: highest saves → algorithm boost → explore page
-// Reel: highest reach potential → new followers
-// Post: consistent engagement → trust signals
+// Smart content mix: carousel (saves), reels (reach), image (engagement)
 function getSmartContentType(): "image" | "carousel" | "reels" {
   const rand = Math.random();
   if (rand < 0.40) return "carousel"; // 40% — highest save rate
@@ -41,63 +30,79 @@ function getSmartContentType(): "image" | "carousel" | "reels" {
   return "image";                     // 30% — consistent baseline
 }
 
+function ensureMinSlides(prompts: string[], queries: string[], defaultQuery: string, subject: string, min: number) {
+  const p = [...prompts];
+  const q = [...queries];
+  const fillers = [
+    `Wide establishing photo of ${subject}`,
+    `Close-up documentary photo related to ${subject}`,
+    `Crowd or people affected by ${subject}`,
+    `Context/background photo for ${subject}`,
+    `Resolution or current state of ${subject}`,
+  ];
+  while (p.length < min) { p.push(fillers[p.length] || `${subject} news photo`); q.push(defaultQuery); }
+  return { prompts: p, queries: q };
+}
+
 async function generateScheduledContent(): Promise<void> {
   const [config] = await db.select().from(configTable).limit(1);
   if (!config) return;
 
   const type = getSmartContentType();
-  logger.info({ niche: config.niche, type }, "Scheduler: generating content");
+  const trending = await getOneTrendingTopic();
+  logger.info({ topic: trending.title, type }, "Scheduler: generating content for trending topic");
 
   try {
-    const content = await generateInstagramContent(config.niche, config.language, type);
+    const content = await generateInstagramContent(config.niche, config.language, type, trending);
+    const effectiveSource = config.imageSource || "ai";
+    const smartQuery = trending.imageQuery || content.searchQuery || "";
+    const subject = content.captionSubject || trending.title;
 
     let imageUrl = "";
     let videoUrl: string | undefined;
     let mediaUrls: string[] = [];
 
     if (type === "reels") {
-      const reel = await generateReelVideo(content.imagePrompt, config.niche, config.imageSource || undefined);
+      // Fix: pass niche as 2nd arg, imageSource as 3rd arg (was passing imageSource as niche before!)
+      const reel = await generateReelVideo(content.imagePrompt, config.niche, effectiveSource);
       imageUrl = reel.imageUrl;
       videoUrl = reel.videoUrl;
     } else if (type === "carousel") {
-      const prompts = content.carouselPrompts || [content.imagePrompt, content.imagePrompt, content.imagePrompt];
-      const queries = content.carouselQueries || [content.searchQuery];
-      for (let i = 0; i < Math.min(prompts.length, 10); i++) {
+      const raw = content.carouselPrompts || [];
+      const rawQ = content.carouselQueries || [];
+      const padded = ensureMinSlides(raw, rawQ, smartQuery, subject, 5);
+
+      for (let i = 0; i < Math.min(padded.prompts.length, 10); i++) {
         const url = await generatePostImage(
-          prompts[i],
-          queries[i] || content.searchQuery || "",
-          config.imageSource || undefined,
-          content.captionSubject,
+          padded.prompts[i],
+          padded.queries[i] || smartQuery,
+          effectiveSource,
+          subject,
         ).catch(() => "");
         if (url) mediaUrls.push(url);
       }
+      // Guarantee min 2 slides
+      if (mediaUrls.length === 1) mediaUrls.push(mediaUrls[0]);
       imageUrl = mediaUrls[0] || "";
     } else {
-      imageUrl = await generatePostImage(
-        content.imagePrompt,
-        content.searchQuery || "",
-        config.imageSource || undefined,
-        content.captionSubject,
-      );
+      imageUrl = await generatePostImage(content.imagePrompt, smartQuery, effectiveSource, subject);
     }
 
-    // Auto-approve search images (they're real photos = safe to post)
-    // AI images go to pending for human review
-    const status = config.imageSource === "search" || config.autoApprove ? "approved" : "pending";
+    const status = config.autoApprove ? "approved" : "pending";
 
     await db.insert(postsTable).values({
       caption: content.caption,
       hashtags: content.hashtags,
       imageUrl,
       videoUrl: videoUrl || undefined,
-      mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+      mediaUrls: mediaUrls.length >= 2 ? mediaUrls : undefined,
       mediaType: type,
       imagePrompt: content.imagePrompt,
       status,
       scheduledFor: new Date(),
     });
 
-    logger.info({ type, status }, "Scheduler: content queued");
+    logger.info({ type, status, topic: trending.title }, "Scheduler: content queued");
   } catch (err) {
     logger.error({ err }, "Scheduler: content generation failed");
   }
@@ -118,10 +123,7 @@ async function recoverStaleClaims(): Promise<void> {
     .returning({ id: postsTable.id });
 
   if (stale.length > 0) {
-    logger.warn(
-      { count: stale.length, ids: stale.map((r) => r.id) },
-      "Scheduler: released stale publish claims (process likely crashed mid-publish)",
-    );
+    logger.warn({ count: stale.length }, "Scheduler: released stale publish claims");
   }
 }
 
@@ -137,8 +139,6 @@ async function publishApprovedPosts(): Promise<void> {
   if (!due.length) return;
   logger.info({ count: due.length }, "Scheduler: publishing approved posts");
 
-  // Provide a base URL so any relative media URLs can be resolved to absolute
-  // before being sent to Instagram. Fall back to the Replit dev domain if set.
   const baseUrl =
     process.env.PUBLIC_API_BASE_URL ||
     (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "");
@@ -157,8 +157,37 @@ async function publishApprovedPosts(): Promise<void> {
   }
 }
 
+// ── Auto token refresh — runs every 50 days ──────────────────────────────────
+let lastTokenRefresh = 0;
+const TOKEN_REFRESH_INTERVAL_MS = 50 * 24 * 60 * 60 * 1000; // 50 days
+
+async function autoRefreshToken(): Promise<void> {
+  if (Date.now() - lastTokenRefresh < TOKEN_REFRESH_INTERVAL_MS) return;
+
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) return;
+
+  const [config] = await db.select().from(configTable).limit(1);
+  if (!config?.metaAccessToken) return;
+
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${config.metaAccessToken}`,
+    );
+    const data = (await res.json()) as { access_token?: string };
+    if (data.access_token) {
+      await db.update(configTable).set({ metaAccessToken: data.access_token, updatedAt: new Date() });
+      lastTokenRefresh = Date.now();
+      logger.info("Scheduler: auto-refreshed Meta access token");
+    }
+  } catch (err) {
+    logger.warn({ err }, "Scheduler: auto token refresh failed");
+  }
+}
+
 export function startScheduler(): void {
-  logger.info("Scheduler: auto-pilot started — checking every 60s for optimal posting times");
+  logger.info("Scheduler: auto-pilot started — checking every 60s");
 
   setInterval(async () => {
     try {
@@ -174,12 +203,13 @@ export function startScheduler(): void {
         isNow(config.midnightPostTime);
 
       if (isPostingTime) {
-        logger.info("Scheduler: optimal posting time hit — generating content");
+        logger.info("Scheduler: posting time hit — generating trending content");
         await generateScheduledContent();
       }
 
       await recoverStaleClaims();
       await publishApprovedPosts();
+      await autoRefreshToken();
     } catch (err) {
       logger.error({ err }, "Scheduler: tick error");
     }

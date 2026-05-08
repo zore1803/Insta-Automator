@@ -25,61 +25,49 @@ const RejectPostParams = z.object({ id: z.coerce.number() });
 
 router.get("/posts", async (req, res) => {
   const query = ListPostsQueryParams.parse(req.query);
-
   const conditions: any[] = [];
-  if (query.status) {
-    conditions.push(eq(postsTable.status, query.status));
-  }
-
+  if (query.status) conditions.push(eq(postsTable.status, query.status));
   const whereClause = (conditions.length > 0 ? and(...conditions) : undefined) as any;
 
   const [posts, totalResult] = await Promise.all([
-    db
-      .select()
-      .from(postsTable)
-      .where(whereClause)
-      .orderBy(desc(postsTable.createdAt))
-      .limit(query.limit)
-      .offset(query.offset),
+    db.select().from(postsTable).where(whereClause).orderBy(desc(postsTable.createdAt)).limit(query.limit).offset(query.offset),
     db.select({ count: count() }).from(postsTable).where(whereClause),
   ]);
 
-  res.json({
-    posts: posts.map(serializePost),
-    total: totalResult[0]?.count ?? 0,
-  });
+  res.json({ posts: posts.map(serializePost), total: totalResult[0]?.count ?? 0 });
 });
 
 router.get("/posts/today", async (req, res) => {
   const posts = await db
     .select()
     .from(postsTable)
-    .where(
-      and(
-        ne(postsTable.status, "posted"),
-        ne(postsTable.status, "rejected"),
-      ),
-    )
+    .where(and(ne(postsTable.status, "posted"), ne(postsTable.status, "rejected")))
     .orderBy(desc(postsTable.createdAt));
 
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  res.json({
-    posts: posts.map(serializePost),
-    total: posts.length,
-  });
+  res.json({ posts: posts.map(serializePost), total: posts.length });
 });
 
+// ── Generate post ─────────────────────────────────────────────────────────────
 router.post("/posts/generate", async (req, res) => {
-  const { type = "image", imageSource } = req.body;
+  const { type = "image", imageSource, topicTitle } = req.body;
   const config = await getConfig();
-  req.log.info({ niche: config.niche, type }, "Generating content");
+  req.log.info({ niche: config.niche, type, topicTitle }, "Generating content");
 
   try {
     const { generateInstagramContent } = await import("../services/claudeService.js");
     const { generatePostImage } = await import("../services/imageService.js");
     const { generateReelVideo } = await import("../services/videoService.js");
+    const { getTrendingTopics } = await import("../services/trendingService.js");
 
-    const content = await generateInstagramContent(config.niche, config.language, type);
+    // If a specific topic was requested, find it; otherwise let the service pick
+    let forcedTopic;
+    if (topicTitle) {
+      const topics = await getTrendingTopics(10);
+      forcedTopic = topics.find((t) => t.title === topicTitle);
+    }
+
+    const content = await generateInstagramContent(config.niche, config.language, type, forcedTopic);
 
     if (!content.caption || !content.imagePrompt) {
       req.log.error({ content }, "AI returned invalid content structure");
@@ -87,30 +75,49 @@ router.post("/posts/generate", async (req, res) => {
       return;
     }
 
-    let smartSearchQuery = content.searchQuery || content.imagePrompt;
-    const subject = content.captionSubject;
-    if (subject) {
-      smartSearchQuery = `${subject} latest candid action photo`;
-    }
+    // Use the trending topic's search query for image search (more specific than generic)
+    const trending = content.trendingTopic;
+    const smartImageQuery = trending?.imageQuery || content.searchQuery || content.imagePrompt;
+    const subject = content.captionSubject || trending?.title;
+
+    // Determine effective image source — body overrides config
+    const effectiveImageSource = imageSource || config.imageSource || "ai";
 
     let imageUrl: string;
     let videoUrl: string | null = null;
     let mediaUrls: string[] = [];
 
     if (type === "reels") {
-      const reelData = await generateReelVideo(content.imagePrompt, imageSource);
+      // Fix: pass niche as 2nd arg, imageSource as 3rd arg
+      const reelData = await generateReelVideo(content.imagePrompt, config.niche, effectiveImageSource);
       imageUrl = reelData.imageUrl;
       videoUrl = reelData.videoUrl;
     } else if (type === "carousel") {
-      const prompts = content.carouselPrompts || [content.imagePrompt];
-      const queries = content.carouselQueries || [smartSearchQuery];
-      for (let i = 0; i < Math.min(prompts.length, 10); i++) {
-        const url = await generatePostImage(prompts[i], queries[i] || smartSearchQuery, imageSource, subject);
-        mediaUrls.push(url);
+      // Ensure at least 5 prompts (Instagram requires min 2, we aim for 5)
+      const rawPrompts = content.carouselPrompts || [];
+      const rawQueries = content.carouselQueries || [];
+
+      // Fill to 5 if needed
+      const padded = ensureMinSlides(rawPrompts, rawQueries, smartImageQuery, subject || "", 5);
+
+      for (let i = 0; i < Math.min(padded.prompts.length, 10); i++) {
+        const url = await generatePostImage(
+          padded.prompts[i],
+          padded.queries[i] || smartImageQuery,
+          effectiveImageSource,
+          subject,
+        ).catch(() => "");
+        if (url) mediaUrls.push(url);
       }
+
+      // Guarantee minimum 2 slides (Instagram requires it)
+      if (mediaUrls.length < 2 && mediaUrls.length > 0) {
+        mediaUrls.push(mediaUrls[0]);
+      }
+
       imageUrl = mediaUrls[0] || "";
     } else {
-      imageUrl = await generatePostImage(content.imagePrompt, smartSearchQuery, imageSource, subject);
+      imageUrl = await generatePostImage(content.imagePrompt, smartImageQuery, effectiveImageSource, subject);
     }
 
     const scheduledFor = getNextScheduleTime(config);
@@ -118,11 +125,11 @@ router.post("/posts/generate", async (req, res) => {
     const [post] = await db
       .insert(postsTable)
       .values({
-        caption: content.caption || "No caption generated",
+        caption: content.caption,
         hashtags: content.hashtags || "",
         imageUrl,
         videoUrl: videoUrl || undefined,
-        mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+        mediaUrls: mediaUrls.length >= 2 ? mediaUrls : undefined,
         mediaType: type,
         imagePrompt: content.imagePrompt,
         status: config.autoApprove ? "approved" : "pending",
@@ -137,101 +144,68 @@ router.post("/posts/generate", async (req, res) => {
   }
 });
 
+// ── Regenerate caption for existing post ──────────────────────────────────────
+router.post("/posts/:id/regenerate-caption", async (req, res) => {
+  const { id } = GetPostParams.parse(req.params);
+  const config = await getConfig();
+
+  const [existing] = await db.select().from(postsTable).where(eq(postsTable.id, id) as any);
+  if (!existing) { res.status(404).json({ error: "Post not found" }); return; }
+
+  try {
+    const { generateInstagramContent } = await import("../services/claudeService.js");
+    const content = await generateInstagramContent(config.niche, config.language, existing.mediaType as any);
+
+    const [updated] = await db
+      .update(postsTable)
+      .set({ caption: content.caption, hashtags: content.hashtags, updatedAt: new Date() })
+      .where(eq(postsTable.id, id) as any)
+      .returning();
+
+    req.log.info({ id }, "Caption regenerated");
+    res.json(serializePost(updated!));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to regenerate caption" });
+  }
+});
+
 router.get("/posts/:id", async (req, res) => {
   const { id } = GetPostParams.parse(req.params);
-  const [post] = await db
-    .select()
-    .from(postsTable)
-    .where(eq(postsTable.id, id) as any);
-
-  if (!post) {
-    res.status(404).json({ error: "Post not found" });
-    return;
-  }
-
+  const [post] = await db.select().from(postsTable).where(eq(postsTable.id, id) as any);
+  if (!post) { res.status(404).json({ error: "Post not found" }); return; }
   res.json(serializePost(post));
 });
 
 router.patch("/posts/:id", async (req, res) => {
   const { id } = UpdatePostParams.parse(req.params);
   const body = UpdatePostBody.parse(req.body);
-
-  const [post] = await db
-    .update(postsTable)
-    .set({ ...body, updatedAt: new Date() })
-    .where(eq(postsTable.id, id) as any)
-    .returning();
-
-  if (!post) {
-    res.status(404).json({ error: "Post not found" });
-    return;
-  }
-
+  const [post] = await db.update(postsTable).set({ ...body, updatedAt: new Date() }).where(eq(postsTable.id, id) as any).returning();
+  if (!post) { res.status(404).json({ error: "Post not found" }); return; }
   res.json(serializePost(post));
 });
 
 router.post("/posts/:id/approve", async (req, res) => {
   const { id } = ApprovePostParams.parse(req.params);
-
-  const [post] = await db
-    .update(postsTable)
-    .set({ status: "approved", updatedAt: new Date() })
-    .where(eq(postsTable.id, id) as any)
-    .returning();
-
-  if (!post) {
-    res.status(404).json({ error: "Post not found" });
-    return;
-  }
-
+  const [post] = await db.update(postsTable).set({ status: "approved", updatedAt: new Date() }).where(eq(postsTable.id, id) as any).returning();
+  if (!post) { res.status(404).json({ error: "Post not found" }); return; }
   res.json(serializePost(post));
 });
 
 router.post("/posts/:id/reject", async (req, res) => {
   const { id } = RejectPostParams.parse(req.params);
-
-  const [post] = await db
-    .update(postsTable)
-    .set({ status: "rejected", updatedAt: new Date() })
-    .where(eq(postsTable.id, id) as any)
-    .returning();
-
-  if (!post) {
-    res.status(404).json({ error: "Post not found" });
-    return;
-  }
-
+  const [post] = await db.update(postsTable).set({ status: "rejected", updatedAt: new Date() }).where(eq(postsTable.id, id) as any).returning();
+  if (!post) { res.status(404).json({ error: "Post not found" }); return; }
   res.json(serializePost(post));
 });
 
 router.post("/posts/:id/retry", async (req, res) => {
   const { id } = RetryPostParams.parse(req.params);
+  const [existing] = await db.select().from(postsTable).where(eq(postsTable.id, id) as any);
+  if (!existing) { res.status(404).json({ error: "Post not found" }); return; }
+  if (existing.status !== "failed") { res.status(400).json({ error: `Post must be in failed state (current: ${existing.status})` }); return; }
 
-  const [existing] = await db
-    .select()
-    .from(postsTable)
-    .where(eq(postsTable.id, id) as any);
-
-  if (!existing) {
-    res.status(404).json({ error: "Post not found" });
-    return;
-  }
-
-  if (existing.status !== "failed") {
-    res.status(400).json({ error: `Post must be in failed state to retry (current: ${existing.status})` });
-    return;
-  }
-
-  const [reset] = await db
-    .update(postsTable)
-    .set({ status: "approved", publishError: null, instagramPostId: null, updatedAt: new Date() })
-    .where(eq(postsTable.id, id) as any)
-    .returning();
-
-  if (!reset) {
-    res.status(404).json({ error: "Post not found" });
-    return;
-  }
+  const [reset] = await db.update(postsTable).set({ status: "approved", publishError: null, instagramPostId: null, updatedAt: new Date() }).where(eq(postsTable.id, id) as any).returning();
+  if (!reset) { res.status(404).json({ error: "Post not found" }); return; }
 
   const protocol = req.headers["x-forwarded-proto"] || req.protocol;
   const host = req.get("host");
@@ -239,27 +213,12 @@ router.post("/posts/:id/retry", async (req, res) => {
 
   try {
     await publishPost(id, baseUrl);
-
-    const [updated] = await db
-      .select()
-      .from(postsTable)
-      .where(eq(postsTable.id, id) as any);
-
+    const [updated] = await db.select().from(postsTable).where(eq(postsTable.id, id) as any);
     res.json(serializePost(updated!));
   } catch (err: any) {
-    const [failed] = await db
-      .select()
-      .from(postsTable)
-      .where(eq(postsTable.id, id) as any);
-
+    const [failed] = await db.select().from(postsTable).where(eq(postsTable.id, id) as any);
     const post = failed ? serializePost(failed) : undefined;
-
-    if (err instanceof PublishError) {
-      const status = err.code === "NOT_FOUND" ? 404 : 400;
-      res.status(status).json({ error: err.message, post });
-      return;
-    }
-
+    if (err instanceof PublishError) { res.status(err.code === "NOT_FOUND" ? 404 : 400).json({ error: err.message, post }); return; }
     req.log.error({ err }, "Failed to retry post");
     res.status(500).json({ error: err.message || "Failed to publish post", post });
   }
@@ -267,86 +226,84 @@ router.post("/posts/:id/retry", async (req, res) => {
 
 router.post("/posts/:id/publish", async (req, res) => {
   const { id } = PublishPostParams.parse(req.params);
-
   const protocol = req.headers["x-forwarded-proto"] || req.protocol;
   const host = req.get("host");
   const baseUrl = `${protocol}://${host}`;
 
   try {
     await publishPost(id, baseUrl);
-
-    const [updated] = await db
-      .select()
-      .from(postsTable)
-      .where(eq(postsTable.id, id) as any);
-
-    if (!updated) {
-      res.status(404).json({ error: "Post not found" });
-      return;
-    }
-
+    const [updated] = await db.select().from(postsTable).where(eq(postsTable.id, id) as any);
+    if (!updated) { res.status(404).json({ error: "Post not found" }); return; }
     res.json(serializePost(updated));
   } catch (err: any) {
-    if (err instanceof PublishError) {
-      const status = err.code === "NOT_FOUND" ? 404 : 400;
-      res.status(status).json({ error: err.message });
-      return;
-    }
+    if (err instanceof PublishError) { res.status(err.code === "NOT_FOUND" ? 404 : 400).json({ error: err.message }); return; }
     req.log.error({ err }, "Failed to publish post");
     res.status(500).json({ error: err.message || "Failed to publish post" });
   }
 });
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function ensureMinSlides(
+  prompts: string[],
+  queries: string[],
+  defaultQuery: string,
+  subject: string,
+  min: number,
+): { prompts: string[]; queries: string[] } {
+  const p = [...prompts];
+  const q = [...queries];
+  const subjects = [
+    `Wide establishing shot of ${subject} — crowd, scene, location`,
+    `Close-up detail photo related to ${subject} — human impact visible`,
+    `Context photo for ${subject} — background and setting`,
+    `People affected by ${subject} — authentic moment`,
+    `${subject} — resolution or current state photo`,
+  ];
+  while (p.length < min) {
+    p.push(subjects[p.length] || `News photo of ${subject}`);
+    q.push(defaultQuery);
+  }
+  return { prompts: p, queries: q };
+}
+
 async function getConfig() {
   const [config] = await db.select().from(configTable).limit(1);
   if (!config) {
     return {
-      niche: "fitness",
-      morningPostTime: "09:00",
+      niche: "Indian current affairs, trending news, Maharashtra business",
+      morningPostTime: "08:00",
       afternoonPostTime: "12:00",
-      eveningPostTime: "15:00",
-      nightPostTime: "18:00",
+      eveningPostTime: "16:00",
+      nightPostTime: "20:00",
       lateNightPostTime: "21:00",
-      midnightPostTime: "00:00",
+      midnightPostTime: "22:00",
       language: "English",
       autoApprove: false,
       instagramAccountId: "",
       metaAccessToken: "",
+      imageSource: "ai",
     };
   }
   return config;
 }
 
 function getNextScheduleTime(config: {
-  morningPostTime: string;
-  afternoonPostTime: string;
-  eveningPostTime: string;
-  nightPostTime: string;
-  lateNightPostTime: string;
-  midnightPostTime: string;
+  morningPostTime: string; afternoonPostTime: string; eveningPostTime: string;
+  nightPostTime: string; lateNightPostTime: string; midnightPostTime: string;
 }): Date {
   const now = new Date();
   const times = [
-    config.morningPostTime,
-    config.afternoonPostTime,
-    config.eveningPostTime,
-    config.nightPostTime,
-    config.lateNightPostTime,
-    config.midnightPostTime,
+    config.morningPostTime, config.afternoonPostTime, config.eveningPostTime,
+    config.nightPostTime, config.lateNightPostTime, config.midnightPostTime,
   ].map((t) => (t || "00:00").split(":").map(Number));
 
   const timesToday = times
-    .map(([h, m]) => {
-      const d = new Date();
-      d.setHours(h, m, 0, 0);
-      return d;
-    })
+    .map(([h, m]) => { const d = new Date(); d.setHours(h, m, 0, 0); return d; })
     .sort((a, b) => a.getTime() - b.getTime());
 
   for (const time of timesToday) {
     if (now < time) return time;
   }
-
   const firstTomorrow = new Date(timesToday[0]);
   firstTomorrow.setDate(firstTomorrow.getDate() + 1);
   return firstTomorrow;

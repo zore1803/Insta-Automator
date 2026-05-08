@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useGetTodaysPosts,
@@ -18,20 +18,47 @@ import { format } from "date-fns";
 import {
   Loader2, Check, X, Send, Clock, Image as ImageIcon,
   Edit3, Save, CheckCircle2, Film, Layout, Sparkles,
-  TrendingUp, Eye, BarChart2, Upload, RefreshCw, Zap
+  TrendingUp, Eye, BarChart2, Upload, RefreshCw, Zap,
+  Flame, ChevronRight, RotateCcw, MessageCircle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 
+interface TrendingTopic {
+  title: string;
+  searchQuery: string;
+  imageQuery: string;
+  hashtags: string[];
+  contentAngle: string;
+  region: string;
+}
+
+interface AccountInsights {
+  profile: {
+    followers_count?: number;
+    media_count?: number;
+    username?: string;
+    name?: string;
+    profile_picture_url?: string;
+  };
+  recentMedia: Array<{
+    id: string;
+    mediaType: string;
+    timestamp: string;
+    likeCount: number;
+    commentsCount: number;
+    caption?: string;
+    thumbnailUrl?: string;
+  }>;
+}
+
 export function Dashboard() {
   const { data: posts, isLoading: loadingPosts } = useGetTodaysPosts({
     query: { refetchInterval: 3000 } as any,
   });
-  const { data: stats } = useGetStats({
-    query: { refetchInterval: 15000 } as any,
-  });
+  const { data: stats } = useGetStats({ query: { refetchInterval: 15000 } as any });
   const { data: config } = useGetConfig();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -47,9 +74,49 @@ export function Dashboard() {
   const [editCaption, setEditCaption] = useState("");
   const [editHashtags, setEditHashtags] = useState("");
   const [generatingType, setGeneratingType] = useState<string | null>(null);
-  // Optimistic local state so toggle switches instantly without waiting for server round-trip
+  const [regeneratingId, setRegeneratingId] = useState<number | null>(null);
   const [localImageSource, setLocalImageSource] = useState<"ai" | "search" | null>(null);
+  const [trendingTopics, setTrendingTopics] = useState<TrendingTopic[]>([]);
+  const [loadingTrending, setLoadingTrending] = useState(false);
+  const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
+  const [accountInsights, setAccountInsights] = useState<AccountInsights | null>(null);
+  const [loadingInsights, setLoadingInsights] = useState(false);
+  const [showInsights, setShowInsights] = useState(false);
+
   const activeSource = localImageSource ?? (config?.imageSource as "ai" | "search" | null) ?? "ai";
+
+  // Load trending topics on mount
+  useEffect(() => {
+    fetchTrending();
+  }, []);
+
+  // Load analytics if Instagram connected
+  useEffect(() => {
+    if (config?.instagramAccountId && config?.metaAccessToken && showInsights) {
+      fetchInsights();
+    }
+  }, [config?.instagramAccountId, showInsights]);
+
+  const fetchTrending = async () => {
+    setLoadingTrending(true);
+    try {
+      const res = await fetch("/api/analytics/trending");
+      if (res.ok) {
+        const data = await res.json();
+        setTrendingTopics(data.topics || []);
+      }
+    } catch {}
+    setLoadingTrending(false);
+  };
+
+  const fetchInsights = async () => {
+    setLoadingInsights(true);
+    try {
+      const res = await fetch("/api/analytics/account");
+      if (res.ok) setAccountInsights(await res.json());
+    } catch {}
+    setLoadingInsights(false);
+  };
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: getGetTodaysPostsQueryKey() });
@@ -57,36 +124,41 @@ export function Dashboard() {
     queryClient.invalidateQueries({ queryKey: getListPostsQueryKey() });
   };
 
-  const handleGenerate = (type: "image" | "reels" | "carousel") => {
+  const handleGenerate = (type: "image" | "reels" | "carousel", topicTitle?: string) => {
     setGeneratingType(type);
-    generatePost.mutate({ data: { type, imageSource: activeSource } } as any, {
+    generatePost.mutate({ data: { type, imageSource: activeSource, topicTitle } } as any, {
       onSuccess: () => {
         toast({ title: `${type === "reels" ? "Reel" : type === "carousel" ? "Carousel" : "Post"} generated!` });
         invalidate();
+        setSelectedTopic(null);
       },
       onError: (err: any) => toast({ title: "Generation failed", description: String(err?.message || err), variant: "destructive" }),
       onSettled: () => setGeneratingType(null),
     });
   };
 
-  const handleApprove = (id: number) =>
-    approvePost.mutate({ id } as any, { onSuccess: invalidate });
+  const handleRegenerateCaption = async (postId: number) => {
+    setRegeneratingId(postId);
+    try {
+      const res = await fetch(`/api/posts/${postId}/regenerate-caption`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).error || "Failed");
+      toast({ title: "Caption refreshed!" });
+      invalidate();
+    } catch (err: any) {
+      toast({ title: "Failed", description: err.message, variant: "destructive" });
+    }
+    setRegeneratingId(null);
+  };
 
-  const handleReject = (id: number) =>
-    rejectPost.mutate({ id } as any, { onSuccess: invalidate });
-
+  const handleApprove = (id: number) => approvePost.mutate({ id } as any, { onSuccess: invalidate });
+  const handleReject = (id: number) => rejectPost.mutate({ id } as any, { onSuccess: invalidate });
   const handlePublish = (id: number) =>
     publishPost.mutate({ id } as any, {
       onSuccess: () => { toast({ title: "Live on Instagram!" }); invalidate(); },
       onError: (err: any) => toast({ title: "Publish failed", description: String(err?.message || err), variant: "destructive" }),
     });
 
-  const startEditing = (post: any) => {
-    setEditingId(post.id);
-    setEditCaption(post.caption);
-    setEditHashtags(post.hashtags);
-  };
-
+  const startEditing = (post: any) => { setEditingId(post.id); setEditCaption(post.caption); setEditHashtags(post.hashtags); };
   const saveEdit = (id: number) =>
     updatePost.mutate({ id, data: { caption: editCaption, hashtags: editHashtags } } as any, {
       onSuccess: () => { setEditingId(null); invalidate(); toast({ title: "Caption saved" }); },
@@ -96,7 +168,7 @@ export function Dashboard() {
     { label: "Total Published", value: stats?.totalPosted ?? "—", icon: CheckCircle2, color: "from-emerald-500/20 to-emerald-500/5", iconColor: "text-emerald-400", border: "border-emerald-500/20" },
     { label: "Pending Review", value: stats?.totalPending ?? "—", icon: Clock, color: "from-amber-500/20 to-amber-500/5", iconColor: "text-amber-400", border: "border-amber-500/20" },
     { label: "This Month", value: stats?.postsThisMonth ?? "—", icon: BarChart2, color: "from-blue-500/20 to-blue-500/5", iconColor: "text-blue-400", border: "border-blue-500/20" },
-    { label: "This Week", value: stats?.postsThisWeek ?? "—", icon: TrendingUp, color: "from-violet-500/20 to-violet-500/5", iconColor: "text-violet-400", border: "border-violet-500/20" },
+    { label: "Followers", value: accountInsights?.profile?.followers_count ? `${(accountInsights.profile.followers_count / 1000).toFixed(1)}K` : (stats?.postsThisWeek ?? "—"), icon: TrendingUp, color: "from-violet-500/20 to-violet-500/5", iconColor: "text-violet-400", border: "border-violet-500/20" },
   ];
 
   return (
@@ -111,10 +183,12 @@ export function Dashboard() {
           <h1 className="text-3xl font-extrabold tracking-tight text-foreground">
             Content <span className="ig-text">Pipeline</span>
           </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Niche: <span className="text-foreground font-medium">{config?.niche || "Loading…"}</span>
-            {" · "}
-            <span className="text-emerald-400">●</span> Auto-pilot running
+          <p className="text-muted-foreground text-sm mt-1 flex items-center gap-2">
+            <span className="flex items-center gap-1">
+              <Flame className="h-3.5 w-3.5 text-orange-400" />
+              <span className="text-orange-400 font-semibold">Trending-first</span>
+            </span>
+            · <span className="text-emerald-400">●</span> Auto-pilot running
           </p>
         </div>
 
@@ -127,52 +201,96 @@ export function Dashboard() {
                 key={src}
                 onClick={() => {
                   setLocalImageSource(src);
-                  updateConfig.mutate({ data: { imageSource: src } } as any, {
-                    onError: () => setLocalImageSource(null), // revert on error
-                  });
+                  updateConfig.mutate({ data: { imageSource: src } } as any, { onError: () => setLocalImageSource(null) });
                 }}
-                className={`px-5 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${
-                  activeSource === src
-                    ? "ig-gradient text-white shadow-lg scale-[1.03]"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
+                className={`px-5 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${activeSource === src ? "ig-gradient text-white shadow-lg scale-[1.03]" : "text-muted-foreground hover:text-foreground"}`}
               >
                 {src === "ai" ? "✨ AI Images" : "🔍 Real Photos"}
               </button>
             ))}
           </div>
           <p className="text-[10px] text-muted-foreground">
-            {activeSource === "ai" ? "Flux AI generates every image" : "Pexels real photos used instead"}
+            {activeSource === "ai" ? "Flux AI generates every image" : "Fetches real news photos from web"}
           </p>
+        </div>
+      </div>
+
+      {/* ── Trending Topics Panel ─────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-orange-500/20 bg-gradient-to-br from-orange-500/5 to-rose-500/5 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-orange-500/15">
+          <div className="flex items-center gap-2">
+            <Flame className="h-4 w-4 text-orange-400 fill-orange-400/30" />
+            <span className="text-sm font-bold text-foreground">Trending in India</span>
+            <Badge variant="outline" className="text-[10px] text-orange-400 border-orange-500/30 px-2 py-0">
+              Click to generate
+            </Badge>
+          </div>
+          <button
+            onClick={fetchTrending}
+            disabled={loadingTrending}
+            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+          >
+            <RefreshCw className={`h-3 w-3 ${loadingTrending ? "animate-spin" : ""}`} /> Refresh
+          </button>
+        </div>
+
+        <div className="p-4">
+          {loadingTrending ? (
+            <div className="flex gap-2 flex-wrap">
+              {[1, 2, 3, 4].map((i) => <div key={i} className="skeleton h-8 w-36 rounded-full" />)}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {trendingTopics.map((topic, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => {
+                    setSelectedTopic(topic.title);
+                    handleGenerate("image", topic.title);
+                  }}
+                  disabled={!!generatingType}
+                  className={`group flex items-center gap-2 px-3 py-2 rounded-full border text-xs font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
+                    selectedTopic === topic.title
+                      ? "ig-gradient border-transparent text-white"
+                      : "border-orange-500/30 text-foreground hover:border-orange-500/60 hover:bg-orange-500/10"
+                  }`}
+                >
+                  {generatingType && selectedTopic === topic.title
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <span className="text-orange-400 group-hover:text-orange-300">🔥</span>
+                  }
+                  <span className="max-w-[150px] truncate">{topic.title}</span>
+                  <span className="text-[9px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">{topic.region}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedTopic && !generatingType && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="text-xs text-muted-foreground">Generate {selectedTopic} as:</span>
+              {(["image", "carousel", "reels"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => handleGenerate(t, selectedTopic)}
+                  disabled={!!generatingType}
+                  className="text-xs px-3 py-1 rounded-full border border-primary/30 text-primary hover:bg-primary/10 transition-colors"
+                >
+                  {t === "image" ? "📷 Post" : t === "carousel" ? "🖼 Carousel" : "🎬 Reel"}
+                </button>
+              ))}
+              <button onClick={() => setSelectedTopic(null)} className="text-xs text-muted-foreground hover:text-foreground">
+                ✕ clear
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Generate Buttons */}
       <div className="grid grid-cols-3 gap-3">
-        <GenerateButton
-          onClick={() => handleGenerate("image")}
-          loading={generatingType === "image"}
-          disabled={!!generatingType}
-          icon={<ImageIcon className="h-4 w-4" />}
-          label="Post"
-          gradient="from-pink-600 via-rose-500 to-orange-500"
-        />
-        <GenerateButton
-          onClick={() => handleGenerate("reels")}
-          loading={generatingType === "reels"}
-          disabled={!!generatingType}
-          icon={<Film className="h-4 w-4" />}
-          label="Reel"
-          gradient="from-violet-600 via-purple-600 to-pink-600"
-        />
-        <GenerateButton
-          onClick={() => handleGenerate("carousel")}
-          loading={generatingType === "carousel"}
-          disabled={!!generatingType}
-          icon={<Layout className="h-4 w-4" />}
-          label="Carousel"
-          gradient="from-amber-500 via-orange-500 to-rose-500"
-        />
+        <GenerateButton onClick={() => handleGenerate("image")} loading={generatingType === "image" && !selectedTopic} disabled={!!generatingType} icon={<ImageIcon className="h-4 w-4" />} label="Post" gradient="from-pink-600 via-rose-500 to-orange-500" />
+        <GenerateButton onClick={() => handleGenerate("reels")} loading={generatingType === "reels" && !selectedTopic} disabled={!!generatingType} icon={<Film className="h-4 w-4" />} label="Reel" gradient="from-violet-600 via-purple-600 to-pink-600" />
+        <GenerateButton onClick={() => handleGenerate("carousel")} loading={generatingType === "carousel" && !selectedTopic} disabled={!!generatingType} icon={<Layout className="h-4 w-4" />} label="Carousel" gradient="from-amber-500 via-orange-500 to-rose-500" />
       </div>
 
       {/* Stats Row */}
@@ -189,6 +307,82 @@ export function Dashboard() {
         ))}
       </div>
 
+      {/* ── Instagram Analytics Panel ────────────────────────────────────── */}
+      {config?.instagramAccountId && (
+        <div className="rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-violet-500/5 overflow-hidden">
+          <button
+            onClick={() => setShowInsights(!showInsights)}
+            className="w-full flex items-center justify-between px-5 py-4 hover:bg-white/5 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-blue-400" />
+              <span className="text-sm font-bold text-foreground">Instagram Insights</span>
+              {accountInsights?.profile?.username && (
+                <span className="text-xs text-muted-foreground">@{accountInsights.profile.username}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-muted-foreground">
+              {loadingInsights ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              <ChevronRight className={`h-4 w-4 transition-transform ${showInsights ? "rotate-90" : ""}`} />
+            </div>
+          </button>
+
+          {showInsights && (
+            <div className="px-5 pb-5 border-t border-blue-500/10">
+              {loadingInsights ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+                </div>
+              ) : accountInsights ? (
+                <div className="mt-4 space-y-4">
+                  {/* Profile header */}
+                  <div className="flex items-center gap-3">
+                    {accountInsights.profile.profile_picture_url && (
+                      <img src={accountInsights.profile.profile_picture_url} alt="Profile" className="h-10 w-10 rounded-full" />
+                    )}
+                    <div>
+                      <div className="font-bold text-sm">{accountInsights.profile.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {accountInsights.profile.followers_count?.toLocaleString("en-IN")} followers · {accountInsights.profile.media_count} posts
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Recent media grid */}
+                  {accountInsights.recentMedia.length > 0 && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-2 font-semibold uppercase tracking-wider">Recent Performance</p>
+                      <div className="grid grid-cols-4 gap-2">
+                        {accountInsights.recentMedia.slice(0, 8).map((m) => (
+                          <div key={m.id} className="relative aspect-square rounded-lg overflow-hidden bg-muted group">
+                            {m.thumbnailUrl ? (
+                              <img src={m.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                <ImageIcon className="h-4 w-4 text-muted-foreground/30" />
+                              </div>
+                            )}
+                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-0.5">
+                              <span className="text-[10px] text-white font-bold">❤️ {m.likeCount}</span>
+                              <span className="text-[10px] text-white/80">💬 {m.commentsCount}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="py-6 text-center">
+                  <p className="text-sm text-muted-foreground">Could not load Instagram insights.</p>
+                  <button onClick={fetchInsights} className="text-xs text-primary hover:underline mt-1">Try again</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Next scheduled auto-post banner */}
       {stats?.nextScheduledPost && (
         <div className="flex items-center gap-3 rounded-2xl border border-primary/20 bg-gradient-to-r from-primary/10 to-violet-500/5 px-5 py-3.5">
@@ -197,9 +391,7 @@ export function Dashboard() {
           </div>
           <div className="min-w-0">
             <p className="text-xs text-muted-foreground font-medium">Next auto-post scheduled for</p>
-            <p className="text-sm font-bold text-foreground">
-              {format(new Date(stats.nextScheduledPost), "EEEE, MMM d · h:mm a")}
-            </p>
+            <p className="text-sm font-bold text-foreground">{format(new Date(stats.nextScheduledPost), "EEEE, MMM d · h:mm a")}</p>
           </div>
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
             <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -227,20 +419,19 @@ export function Dashboard() {
 
         {loadingPosts ? (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="skeleton h-[480px] rounded-2xl" />
-            ))}
+            {[0, 1, 2].map((i) => <div key={i} className="skeleton h-[520px] rounded-2xl" />)}
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {generatePost.isPending && (
-              <div className="card-glass rounded-2xl flex flex-col items-center justify-center min-h-[480px] border-dashed border-2 border-primary/30 gap-4">
+              <div className="card-glass rounded-2xl flex flex-col items-center justify-center min-h-[520px] border-dashed border-2 border-primary/30 gap-4">
                 <div className="h-16 w-16 rounded-full ig-gradient flex items-center justify-center animate-pulse">
                   <Sparkles className="h-7 w-7 text-white" />
                 </div>
                 <div className="text-center">
                   <p className="font-bold text-foreground">Generating {generatingType}…</p>
-                  <p className="text-xs text-muted-foreground mt-1">AI is crafting viral content</p>
+                  {selectedTopic && <p className="text-xs text-orange-400 mt-1">🔥 {selectedTopic}</p>}
+                  <p className="text-xs text-muted-foreground mt-1">Fetching trending content</p>
                 </div>
               </div>
             )}
@@ -252,7 +443,7 @@ export function Dashboard() {
                 </div>
                 <div className="text-center">
                   <h3 className="font-bold text-lg">Queue is empty</h3>
-                  <p className="text-sm text-muted-foreground mt-1">Generate content or wait for auto-pilot</p>
+                  <p className="text-sm text-muted-foreground mt-1">Pick a trending topic above or click Generate</p>
                 </div>
                 <Button onClick={() => handleGenerate("image")} className="ig-gradient border-0 text-white rounded-xl px-8 shadow-lg">
                   <Sparkles className="h-4 w-4 mr-2" /> Generate First Post
@@ -271,9 +462,11 @@ export function Dashboard() {
                 onApprove={() => handleApprove(post.id)}
                 onReject={() => handleReject(post.id)}
                 onPublish={() => handlePublish(post.id)}
+                onRegenerateCaption={() => handleRegenerateCaption(post.id)}
                 editState={{ caption: editCaption, setCaption: setEditCaption, hashtags: editHashtags, setHashtags: setEditHashtags }}
                 isSaving={updatePost.isPending}
                 isPublishing={publishPost.isPending}
+                isRegeneratingCaption={regeneratingId === post.id}
               />
             ))}
           </div>
@@ -300,13 +493,12 @@ function GenerateButton({ onClick, loading, disabled, icon, label, gradient }: a
   );
 }
 
-function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject, onPublish, editState, isSaving, isPublishing }: any) {
+function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject, onPublish, onRegenerateCaption, editState, isSaving, isPublishing, isRegeneratingCaption }: any) {
   const [slide, setSlide] = useState(0);
-  const slides = post.mediaType === "carousel" && post.mediaUrls?.length ? post.mediaUrls : [post.imageUrl];
+  const slides = post.mediaType === "carousel" && post.mediaUrls?.length >= 2 ? post.mediaUrls : post.mediaType === "carousel" && post.mediaUrls?.length === 1 ? [post.mediaUrls[0], post.mediaUrls[0]] : [post.imageUrl];
 
   const statusCls = post.status === "approved" ? "badge-approved" : post.status === "posted" ? "badge-posted" : post.status === "rejected" ? "badge-rejected" : "badge-pending";
   const statusLabel = post.status === "pending" ? "⏳ PENDING" : post.status === "approved" ? "✅ APPROVED" : post.status === "posted" ? "🚀 POSTED" : "❌ REJECTED";
-
   const typeLabel = post.mediaType === "reels" ? "🎬 REEL" : post.mediaType === "carousel" ? `🖼 ×${slides.length}` : "📷 POST";
 
   return (
@@ -328,7 +520,6 @@ function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject
           </div>
         )}
 
-        {/* Gradient overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
 
         {/* Carousel nav */}
@@ -351,7 +542,6 @@ function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject
           </>
         )}
 
-        {/* Top badges */}
         <div className="absolute top-3 left-3 flex gap-1.5 z-10">
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-sm text-white border border-white/10">{typeLabel}</span>
         </div>
@@ -359,12 +549,9 @@ function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border backdrop-blur-sm ${statusCls}`}>{statusLabel}</span>
         </div>
 
-        {/* Scheduled time */}
         <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5">
           <Clock className="h-3 w-3 text-white/70" />
-          <span className="text-[11px] text-white/80 font-medium">
-            {format(new Date(post.scheduledFor), "h:mm a · MMM d")}
-          </span>
+          <span className="text-[11px] text-white/80 font-medium">{format(new Date(post.scheduledFor), "h:mm a · MMM d")}</span>
         </div>
       </div>
 
@@ -372,24 +559,29 @@ function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject
       <div className="p-4 flex-1 flex flex-col gap-3">
         {editing ? (
           <>
-            <Textarea
-              value={editState.caption}
-              onChange={(e) => editState.setCaption(e.target.value)}
-              className="text-xs min-h-[100px] bg-muted border-border/60 resize-none focus:border-primary/50"
-              placeholder="Caption…"
-            />
-            <Textarea
-              value={editState.hashtags}
-              onChange={(e) => editState.setHashtags(e.target.value)}
-              className="text-xs min-h-[40px] bg-muted border-border/60 resize-none text-primary/80 font-mono"
-              placeholder="#hashtags"
-            />
+            <Textarea value={editState.caption} onChange={(e) => editState.setCaption(e.target.value)} className="text-xs min-h-[100px] bg-muted border-border/60 resize-none focus:border-primary/50" placeholder="Caption…" />
+            <Textarea value={editState.hashtags} onChange={(e) => editState.setHashtags(e.target.value)} className="text-xs min-h-[40px] bg-muted border-border/60 resize-none text-primary/80 font-mono" placeholder="#hashtags" />
           </>
         ) : (
           <>
-            <p className="text-xs leading-relaxed text-foreground/85 line-clamp-3">{post.caption}</p>
+            <p className="text-xs leading-relaxed text-foreground/85 line-clamp-4">{post.caption}</p>
             <p className="text-[10px] text-primary/60 font-mono line-clamp-1">{post.hashtags}</p>
           </>
+        )}
+
+        {/* Regenerate caption button */}
+        {!editing && (post.status === "pending" || post.status === "approved") && (
+          <button
+            onClick={() => onRegenerateCaption()}
+            disabled={isRegeneratingCaption}
+            className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-primary transition-colors w-fit"
+          >
+            {isRegeneratingCaption
+              ? <Loader2 className="h-3 w-3 animate-spin" />
+              : <RotateCcw className="h-3 w-3" />
+            }
+            {isRegeneratingCaption ? "Regenerating…" : "Regenerate caption"}
+          </button>
         )}
 
         {/* Actions */}

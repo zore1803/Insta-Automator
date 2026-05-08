@@ -1,4 +1,5 @@
 import { logger } from "../lib/logger.js";
+import { getTrendingTopics, getOneTrendingTopic, type TrendingTopic } from "./trendingService.js";
 
 export interface GeneratedContent {
   caption: string;
@@ -9,214 +10,163 @@ export interface GeneratedContent {
   carouselPrompts?: string[];
   carouselQueries?: string[];
   carouselSlides?: string[];
+  trendingTopic?: TrendingTopic;
 }
 
-// ── Trending topics — updated for May 2026 / Tamil Nadu context ──────────────
-function getTrendingContext(): string {
-  const now = new Date();
-  const hour = now.getHours();
-  const dayOfWeek = now.toLocaleDateString("en-US", { weekday: "long" });
-  const month = now.getMonth(); // 0-indexed
-
-  const trendingTopics = [
-    "Tamil Nadu Local Body Elections 2025 — civic engagement, voting awareness, democracy",
-    "IPL 2025 — cricket fever, Chennai Super Kings, match day energy",
-    "Tamil New Year 2025 — Puthandu celebration, family, tradition, new beginnings",
-    "Summer heat wave in Tamil Nadu — tips, cool drinks, AC, beat the heat content",
-    "Tamil cinema blockbuster season — movies, entertainment, fan moments",
-    "Kanyakumari tourism surge — travel, weekend getaway, south India beauty",
-    "Tamil Nadu startup ecosystem — tech entrepreneurs, Chennai startup culture",
-    "Dravidian politics history — MGR, Jayalalithaa legacy content going viral",
-    "Marina Beach sunrise aesthetic — Chennai lifestyle, early morning walkers",
-    "Coimbatore textile industry boom — business, manufacturing, Made in India",
-  ];
-
-  // Pick 2 trending topics based on day/hour for variety
-  const idx1 = (now.getDate() + hour) % trendingTopics.length;
-  const idx2 = (now.getDate() + hour + 3) % trendingTopics.length;
-  const selected = [trendingTopics[idx1], trendingTopics[idx2]];
-
-  // Time of day context
-  const timeContext =
-    hour < 7 ? "early morning motivation (5-7 AM crowd)"
-    : hour < 10 ? "morning commute / first coffee scroll"
-    : hour < 13 ? "mid-morning productivity / work break"
-    : hour < 15 ? "post-lunch siesta scroll"
-    : hour < 18 ? "afternoon motivation / 3 PM slump"
-    : hour < 20 ? "evening wind-down / commute home"
-    : hour < 22 ? "prime time Instagram (8-10 PM, HIGHEST engagement)"
-    : "late night inspirational scroll";
-
-  // Monthly seasonal context
-  const seasonalContext =
-    month >= 3 && month <= 5 ? "Summer 2025 — heat, vacations, school holidays in TN"
-    : month >= 6 && month <= 8 ? "Monsoon season Tamil Nadu"
-    : month >= 9 && month <= 11 ? "Festival season — Diwali, Dussehra, harvest"
-    : "Winter / New Year energy";
-
-  return `
-TRENDING NOW (inject naturally into content — DO NOT ignore these):
-- ${selected[0]}
-- ${selected[1]}
-
-TODAY: ${dayOfWeek}, ${now.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}
-TIME CONTEXT: ${timeContext}
-SEASONAL: ${seasonalContext}
-`;
-}
-
-// ── Viral hooks — 40 unique opening lines for maximum variety ────────────────
-const CAPTION_HOOKS = [
-  // Tamil Nadu specific
-  "தமிழகத்தில் இப்போது இந்த ஒரு விஷயம் மட்டும் பேசப்படுகிறது —",
-  "Chennai-la இந்த secret யாரும் சொல்ல மாட்டாங்க 👀",
-  "TN election result-க்கு முன்னாடி இதை தெரிஞ்சுக்கோ:",
-  // Universal viral hooks
-  "Nobody talks about this, but",
-  "I studied 100 millionaires and found one thing:",
-  "The #1 thing separating rich from poor is NOT money.",
-  "Most people waste the best years of their life doing this:",
-  "Billionaires wake up at 4 AM to do THIS — not hustle:",
-  "Your bank account is a reflection of your identity.",
-  "Stop trading time for money. Here's what works instead:",
-  "The silent millionaire formula (screenshot this) 📸",
-  "Rich people think differently. Here's the proof:",
-  "I went from ₹0 to 6 figures by doing ONE thing:",
-  "The truth about passive income nobody tells you:",
-  "What 1% of earners know that 99% don't:",
-  "This skill is worth more than any degree right now:",
-  "3 AM thought: what if you invested the time you waste?",
-  "If you're reading this, you're already in the top 10%.",
-  "Hard truth: your comfort zone is your biggest enemy.",
-  "The game changed. Here's what's working in 2025:",
-  "People who retire early all have THIS in common:",
-  "Stop asking for permission. Start asking for outcomes.",
-  "Reminder: you're one decision away from a different life.",
-  "This is what financial freedom actually looks like 👇",
-  "The most underrated investment in 2025:",
-  "Why 95% of people stay broke (it's not what you think):",
-  "Chennai to the world — this entrepreneur did it:",
-  "Every successful Tamil entrepreneur knows this secret:",
-  "The morning habit that changed everything for me:",
-  "If I had to start over today with ₹500, here's what I'd do:",
-  "What I wish someone told me at 22:",
-  "Real talk: debt doesn't make you poor — mindset does.",
-  "This is why most people never build real wealth:",
-  "The compounding effect nobody teaches you in school:",
-  "Small daily habits that make millionaires in 5 years:",
-  "How the Tamil entrepreneur mindset wins globally:",
-  "Your Instagram feed reflects your income level. Change it.",
-  "2025 reality check — are you building or just consuming?",
-  "The difference between your dreams and results is ACTION.",
-  "They don't want you to know this wealth secret:",
+// ── 50 diverse viral hooks — informative and engaging, not framework templates ─
+const HOOKS = [
+  // Maharashtra/India specific
+  "महाराष्ट्र में जो हो रहा है वो सब जानते हैं — पर कोई सच नहीं बोलता:",
+  "Mumbai की सड़कों पर जो दिख रहा है वो असल India की picture है।",
+  "Bihar vs Maharashtra — दोनों तरफ की बात सुनो पहले:",
+  // English informative hooks
+  "The story nobody is telling you about what's happening in India right now:",
+  "I fact-checked this viral claim and the truth shocked even me:",
+  "This happened 3 days ago and 90% of people still don't know:",
+  "Thread: Everything you need to know about this in under 60 seconds —",
+  "Here's what Indian media isn't covering about this:",
+  "The real numbers behind this controversy (screenshot & share):",
+  "One stat that changes how you see this entire situation:",
+  "I spent 3 hours researching this so you don't have to:",
+  "Stop sharing opinions — here are the actual facts:",
+  "This is bigger than you think. Here's why it matters for YOU:",
+  "The uncomfortable truth that nobody wants to say out loud:",
+  "Breaking it down simply because it's more complex than it looks:",
+  "Why this is the most important story in India this week:",
+  "Both sides are wrong. Here's what's actually true:",
+  "This directly affects your money, your future, your city:",
+  "India is changing faster than we realize — here's the proof:",
+  "The thing that will define the next 5 years of India is THIS:",
+  // Business / wealth informative
+  "3 decisions that separated rich from poor in India in the last decade:",
+  "The business model that created 10 Indian billionaires in 5 years:",
+  "Why Pune is beating Bangalore and nobody is talking about it:",
+  "India's middle class is shrinking — here's the data to prove it:",
+  "The ₹500 investment habit that built real wealth in India:",
+  "What nobody tells you about starting a business in Maharashtra:",
+  "This skill earns more than an engineering degree in India right now:",
+  "India's GDP is growing but your salary isn't — here's why:",
+  "The startup that rejected ₹10 crore funding and made ₹100 crore:",
+  "Why 73% of Indian youth want to leave the country (it's not money):",
+  // Cultural / social informative
+  "This cultural clash is older than you think — the history matters:",
+  "Language politics in India — the facts vs the propaganda:",
+  "What Indian history books don't teach you about this conflict:",
+  "The real reason behind the Maharashtra agitation nobody explains:",
+  "How this local issue became a national debate overnight:",
+  "The data on migration patterns that explain everything:",
+  "Cricket taught India this one business lesson that MBA colleges don't:",
+  "What voters in TN need to know before the election (the truth):",
+  "IPL business model that prints ₹3,000 crore every season:",
+  "The Bollywood story they tried to bury completely:",
+  // Engagement hooks
+  "I'm going to say something controversial — and I'll explain why:",
+  "The question people are scared to ask publicly:",
+  "Save this. You'll need it for the next argument:",
+  "This needs to be said and nobody else is saying it:",
+  "Opinion: We've been looking at this completely backwards.",
+  "After reading 50 articles on this, my conclusion surprised me:",
+  "This is not political — it's purely factual. Read before judging:",
+  "Here's the full picture — not just what fits the agenda:",
+  "What if I told you both sides are technically right?",
+  "The nuance everyone is missing in this debate:",
 ];
 
-// ── Content variety seeds (prevents same output) ──────────────────────────────
-const CONTENT_ANGLES = [
-  "motivational wealth mindset",
-  "entrepreneur success story format",
-  "myth vs reality comparison",
-  "step-by-step actionable tips",
-  "shocking statistics + takeaway",
-  "personal story + lesson",
-  "day in the life of a successful person",
-  "common mistakes to avoid",
-  "trending topic reaction + insight",
-  "local Tamil Nadu success angle",
-  "IPL cricket + business metaphor",
-  "summer productivity tips",
-  "election season civic + business angle",
-  "young entrepreneur Tamil Nadu story",
-  "global trend + local application",
-];
-
+// ── Image visual styles for variety ──────────────────────────────────────────
 const IMAGE_STYLES = [
-  "golden hour cinematic",
-  "moody dark luxury",
-  "bright airy minimalist",
-  "vibrant street photography",
-  "dramatic chiaroscuro lighting",
-  "soft pastel aesthetic",
-  "high contrast black and white",
-  "neon cyberpunk urban",
-  "warm vintage film grain",
-  "clean corporate editorial",
-  "tropical vibrant colors",
-  "misty morning fog aesthetic",
+  "news photography style, candid, real, documentary",
+  "editorial photo, high contrast, powerful composition",
+  "photojournalism style, authentic, human emotion visible",
+  "street photography, candid moment, natural light",
+  "aerial view, establishing shot, wide perspective",
+  "close-up portrait, emotion, storytelling face",
+  "crowd photography, energy, real people",
+  "protest/rally photography style, signboards, crowd",
 ];
 
-function formatCaption(raw: string): string {
-  if (!raw) return "";
-  let c = raw.replace(/\\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-  return c;
+function pickHook(seed: number): string {
+  return HOOKS[seed % HOOKS.length];
 }
 
-function buildPrompt(niche: string, language: string, type: string): string {
+function buildPrompt(niche: string, language: string, type: string, trending: TrendingTopic): string {
   const now = new Date();
-  // Use time + seconds as seed to guarantee different content every call
-  const seed = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-  const randomHook = CAPTION_HOOKS[seed % CAPTION_HOOKS.length];
-  const contentAngle = CONTENT_ANGLES[seed % CONTENT_ANGLES.length];
+  const seed = now.getHours() * 100 + now.getMinutes();
+  const hook = pickHook(seed);
   const imageStyle = IMAGE_STYLES[seed % IMAGE_STYLES.length];
-
   const isCarousel = type === "carousel";
   const isReel = type === "reels";
-  const trendingContext = getTrendingContext();
 
-  const languageInstructions =
-    language?.toLowerCase().includes("tamil")
-      ? "Write caption in Tamil (தமிழ்) with some English keywords for searchability. Use Tamil script."
-      : language?.toLowerCase().includes("tanglish") || language?.toLowerCase().includes("tamil english")
-      ? "Write caption in Tanglish (Tamil + English mix) — the way Chennai youth speak."
-      : `Write caption in ${language || "English"}.`;
+  const dateStr = now.toLocaleDateString("en-IN", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+  });
+  const timeStr = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
 
-  return `You are a viral Instagram content creator. Your account niche: "${niche}".
+  const langNote =
+    language?.toLowerCase().includes("hindi")
+      ? "Write caption primarily in Hindi (Devanagari). Mix some English for hashtags."
+      : language?.toLowerCase().includes("marathi")
+      ? "Write caption in Marathi (Devanagari). This is Maharashtra audience."
+      : language?.toLowerCase().includes("tamil")
+      ? "Write caption in Tamil (தமிழ்) with English hashtags."
+      : language?.toLowerCase().includes("tanglish")
+      ? "Write caption in Tanglish (Tamil + English mix as Chennai youth speak)."
+      : "Write caption in English (Indian style, relatable to Indian audience).";
 
-${trendingContext}
+  return `You are a top Indian Instagram journalist and content creator. You create posts about REAL current events with GENUINE information — not motivational fluff.
 
-CONTENT ANGLE FOR THIS POST: ${contentAngle}
-IMAGE VISUAL STYLE: ${imageStyle}
-LANGUAGE: ${languageInstructions}
-FORMAT: ${type.toUpperCase()}
-CREATIVITY SEED: ${seed} (use this to create a unique post, NOT the same as previous posts)
+TODAY: ${dateStr} at ${timeStr}
 
-VIRAL CAPTION FORMULA:
-1. HOOK — Use this EXACT opening line: "${randomHook}"
-2. VALUE — 2-3 short, punchy lines with REAL insight (specific numbers, facts, or story beats)
-3. RELATABILITY — 1 line connecting to the audience's dream OR current trending event
-4. CTA — ONE of: "Save this 📌", "Share with someone who needs this 🔁", "Comment YES if you agree 👇", "Tag your business partner 🤝"
-5. NO brand tag needed (just end with CTA)
+TRENDING TOPIC FOR THIS POST: "${trending.title}"
+BACKGROUND: ${trending.contentAngle}
+ACCOUNT NICHE: ${niche}
 
-HASHTAG RULES:
-- 3 mega tags (1M+ posts): must include at least one Tamil Nadu specific tag
-- 4 large tags (100K-1M): niche specific
-- 4 medium tags (10K-100K): trending + niche mix
-- 2 local tags: #TamilNadu #Chennai OR #Coimbatore etc
-Total: 13 hashtags MAX
+YOUR JOB: Create an Instagram ${type} post about the trending topic "${trending.title}" that:
+1. Opens with this EXACT hook line: "${hook}"
+2. Provides REAL, SPECIFIC information about "${trending.title}" — actual context, background, who's involved, why it matters, what happened
+3. Includes at least ONE specific data point, date, or fact
+4. Connects to how this affects the audience's daily life / money / future
+5. Ends with a genuine CTA that encourages discussion ("What do you think? Comment below 👇" or "Agree or disagree? Tell us" etc.)
 
-IMAGE/VIDEO REQUIREMENTS:
-- Style: ${imageStyle}
-- Format: ${isReel ? "vertical 9:16, motion, dynamic, cinematic" : "square 1:1, editorial, high impact"}
-- NO text overlay, NO watermarks
-- Subject must be UNIQUE and SPECIFIC (not generic "successful person")
-${isCarousel ? `
-CAROUSEL (5 slides):
-- Slide 1: Bold hook title
-- Slides 2-4: One specific tip per slide with data/story
-- Slide 5: Strong CTA + follow prompt` : ""}
+LANGUAGE: ${langNote}
 
-CRITICAL: Make this post COMPLETELY DIFFERENT from a generic wealth motivation post. Reference the trending context naturally. Be SPECIFIC.
+CAPTION RULES:
+- Be INFORMATIVE and SPECIFIC — give actual facts, not just vague statements
+- Be CONVERSATIONAL — like a well-informed friend explaining the situation
+- NO corporate/brand language — talk like a real person
+- Use line breaks for readability
+- 150-250 words for single post, 80-120 words per slide for carousel
+- Emojis sparingly (max 3-4 total)
 
-Respond with VALID JSON ONLY — no markdown, no explanation:
+HASHTAG STRATEGY (13 max):
+- 5 tags specific to "${trending.title}": ${trending.hashtags.join(" ")}
+- 3 location tags (India/Maharashtra/Mumbai/Pune or relevant state)
+- 3 topic tags (news, controversy, viral, etc.)
+- 2 broad reach tags
+
+IMAGE REQUIREMENTS:
+- Style: ${imageStyle} (NOT stock photo look — must look real/documentary)
+- Subject: real people, real places related to "${trending.title}"
+- Format: ${isReel ? "vertical 9:16 cinematic documentary" : "square 1:1 or portrait 4:5"}
+- NO watermarks, NO text overlays, NO AI-obvious art style
+- MUST look like actual news photo or real captured moment
+
+${isCarousel ? `CAROUSEL (5 slides — MUST have EXACTLY 5 different image prompts):
+- Slide 1: Hook — the main topic headline visual
+- Slide 2: Background / context visual
+- Slide 3: Key fact or data point visual
+- Slide 4: Impact on common people visual
+- Slide 5: Call to action / your take visual` : ""}
+
+Respond with VALID JSON ONLY — no markdown, no extra text:
 {
-  "caption": "Full caption with emojis, line breaks as \\n",
-  "hashtags": "#tag1 #tag2 #TamilNadu",
-  "imagePrompt": "${imageStyle} ${isReel ? "9:16 vertical cinematic" : "1:1 editorial"} photo: [VERY specific scene description]",
-  "searchQuery": "5-word specific photo search query",
-  "captionSubject": "specific main subject for image search"${isCarousel ? `,
-  "carouselPrompts": ["slide 1 visual", "slide 2 visual", "slide 3 visual", "slide 4 visual", "slide 5 visual"],
-  "carouselQueries": ["search 1", "search 2", "search 3", "search 4", "search 5"],
-  "carouselSlides": ["Hook title", "Tip 1 text", "Tip 2 text", "Tip 3 text", "Save & Follow 🔖"]` : ""}
+  "caption": "Full caption with \\n for line breaks",
+  "hashtags": "#tag1 #tag2 ...",
+  "imagePrompt": "${imageStyle} photo: [VERY specific real scene from '${trending.title}']",
+  "searchQuery": "${trending.imageQuery}",
+  "captionSubject": "${trending.title}"${isCarousel ? `,
+  "carouselPrompts": ["visual 1 for '${trending.title}'", "visual 2", "visual 3", "visual 4", "visual 5"],
+  "carouselQueries": ["${trending.imageQuery}", "${trending.searchQuery}", "${trending.imageQuery}", "${trending.searchQuery}", "${trending.imageQuery}"],
+  "carouselSlides": ["Slide 1 headline", "Slide 2 fact", "Slide 3 data", "Slide 4 impact", "Comment your opinion 💬"]` : ""}
 }`;
 }
 
@@ -224,10 +174,14 @@ export async function generateInstagramContent(
   niche: string,
   language: string,
   type: "image" | "reels" | "carousel" = "image",
+  forcedTopic?: TrendingTopic,
 ): Promise<GeneratedContent> {
-  const prompt = buildPrompt(niche, language, type);
+  const trending = forcedTopic || await getOneTrendingTopic();
+  const prompt = buildPrompt(niche, language, type, trending);
 
-  // OpenAI GPT-4o (if key present)
+  logger.info({ topic: trending.title, type }, "Generating content for trending topic");
+
+  // OpenAI GPT-4o
   const openaiKey = process.env.OPENAI_API_KEY;
   if (openaiKey) {
     try {
@@ -239,33 +193,29 @@ export async function generateInstagramContent(
           messages: [
             {
               role: "system",
-              content: "You are an expert Instagram content strategist for Tamil Nadu audience. Respond ONLY with valid JSON, no markdown.",
+              content: "You are an expert Indian social media content creator. Write genuine, informative content about real events. Respond ONLY with valid JSON.",
             },
             { role: "user", content: prompt },
           ],
-          temperature: 0.95,
+          temperature: 0.9,
           response_format: { type: "json_object" },
         }),
         signal: AbortSignal.timeout(20000),
       });
       if (res.status === 429 || res.status === 402) {
-        const body = (await res.json()) as any;
-        logger.warn({ status: res.status, code: body?.error?.code }, "OpenAI quota — using free fallback");
+        logger.warn({ status: res.status }, "OpenAI quota — falling back");
       } else if (res.ok) {
         const data = (await res.json()) as any;
         const parsed = JSON.parse(data.choices[0].message.content) as GeneratedContent;
-        parsed.caption = formatCaption(parsed.caption);
-        logger.info({ model: "gpt-4o", type }, "Generated content");
-        return parsed;
-      } else {
-        logger.warn({ status: res.status }, "OpenAI non-OK — using free fallback");
+        parsed.trendingTopic = trending;
+        return ensureCarouselSlides(parsed, trending, type);
       }
     } catch (err) {
-      logger.warn({ err }, "OpenAI request failed — using free fallback");
+      logger.warn({ err }, "OpenAI failed — using Pollinations");
     }
   }
 
-  // Pollinations free fallback
+  // Pollinations fallback
   try {
     const encoded = encodeURIComponent(prompt);
     const res = await fetch(`https://text.pollinations.ai/${encoded}?model=openai&jsonMode=true`, {
@@ -276,27 +226,80 @@ export async function generateInstagramContent(
     if (match) {
       const parsed = JSON.parse(match[0]) as GeneratedContent;
       if (parsed.caption && parsed.hashtags) {
-        parsed.caption = formatCaption(parsed.caption);
-        logger.info({ model: "pollinations", type }, "Generated content");
-        return parsed;
+        parsed.trendingTopic = trending;
+        logger.info({ topic: trending.title }, "Content generated via Pollinations");
+        return ensureCarouselSlides(parsed, trending, type);
       }
     }
   } catch (err) {
     logger.warn({ err }, "Pollinations failed");
   }
 
-  // Hard fallback — TN-specific
-  const now = new Date();
-  const seed = now.getHours() * 60 + now.getMinutes();
-  const hooks = CAPTION_HOOKS.filter(h => !h.includes("தமிழ")); // English fallbacks
-  const fallbackHook = hooks[seed % hooks.length];
-  const trendContext = getTrendingContext();
+  // Hard fallback
+  return buildFallbackContent(trending, type);
+}
 
-  return {
-    caption: `${fallbackHook}\n\nThose who succeed in Tamil Nadu's competitive market understand one thing:\nStart before you're ready. Refine as you grow.\n\n💡 Every rupee you invest in your skills today returns 10x.\n\nTag someone who needs to hear this 👇`,
-    hashtags: "#TamilNadu #Chennai #Entrepreneur #SuccessMindset #BusinessTips #StartupIndia #TamilEntrepreneur #Motivation #WealthMindset #FinancialFreedom #IndianEntrepreneur #Coimbatore #MoneyMindset",
-    imagePrompt: `Cinematic editorial photo of a confident young Tamil entrepreneur in modern Chennai office, city skyline view, ${IMAGE_STYLES[seed % IMAGE_STYLES.length]} lighting, aspirational lifestyle, 4K quality`,
-    searchQuery: "young entrepreneur Chennai office success",
-    captionSubject: "successful entrepreneur Chennai Tamil Nadu",
+// Ensure carousel always has at least 2 slides (Instagram minimum)
+function ensureCarouselSlides(content: GeneratedContent, trending: TrendingTopic, type: string): GeneratedContent {
+  if (type !== "carousel") return content;
+
+  const minSlides = 5;
+  const prompts = content.carouselPrompts || [];
+  const queries = content.carouselQueries || [];
+  const slides = content.carouselSlides || [];
+
+  // Pad to at least minSlides
+  const defaultPrompts = [
+    `Documentary photo of ${trending.title} — main scene, crowd, real people`,
+    `News photography of ${trending.title} — background context, location establishing shot`,
+    `Close-up photo related to ${trending.title} — human emotion, affected people`,
+    `Wide shot showing impact of ${trending.title} — scale, magnitude`,
+    `Quote card style graphic for ${trending.title} — call to action slide`,
+  ];
+
+  while (prompts.length < minSlides) {
+    prompts.push(defaultPrompts[prompts.length] || defaultPrompts[0]);
+  }
+  while (queries.length < minSlides) {
+    queries.push(trending.imageQuery);
+  }
+  while (slides.length < minSlides) {
+    slides.push(`Slide ${slides.length + 1}: ${trending.title}`);
+  }
+
+  content.carouselPrompts = prompts.slice(0, 10);
+  content.carouselQueries = queries.slice(0, 10);
+  content.carouselSlides = slides.slice(0, 10);
+  return content;
+}
+
+function buildFallbackContent(trending: TrendingTopic, type: string): GeneratedContent {
+  const base: GeneratedContent = {
+    caption: `${HOOKS[0]}\n\n${trending.contentAngle}\n\nइस पर आपकी क्या राय है? Comment में बताओ 👇\n\nSave this to share with someone who needs context.`,
+    hashtags: trending.hashtags.join(" ") + " #India #Trending #ViralNews #IndiaNews",
+    imagePrompt: `Documentary style news photography: ${trending.imageQuery}, real people, authentic moment, photojournalism`,
+    searchQuery: trending.imageQuery,
+    captionSubject: trending.title,
+    trendingTopic: trending,
   };
+
+  if (type === "carousel") {
+    base.carouselPrompts = [
+      `News photo of ${trending.title} — establishing wide shot`,
+      `Background context photo for ${trending.title} — historical perspective`,
+      `Key people affected by ${trending.title} — human impact photo`,
+      `Data visualization or protest sign related to ${trending.title}`,
+      `Resolution or future outlook photo for ${trending.title}`,
+    ];
+    base.carouselQueries = Array(5).fill(trending.imageQuery);
+    base.carouselSlides = [
+      trending.title,
+      "The Background",
+      "Key Facts",
+      "Impact on You",
+      "What Do You Think? 💬",
+    ];
+  }
+
+  return base;
 }
