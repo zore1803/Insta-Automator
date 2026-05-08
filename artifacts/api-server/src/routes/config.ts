@@ -92,13 +92,13 @@ async function exchangeAndSave(
   const [existing] = await db.select().from(configTable).limit(1);
   if (!existing) {
     await db.insert(configTable).values({
-      niche: "fitness",
-      morningPostTime: "09:00",
+      niche: "Tamil Nadu Business & Success",
+      morningPostTime: "08:00",
       afternoonPostTime: "12:00",
-      eveningPostTime: "15:00",
-      nightPostTime: "18:00",
+      eveningPostTime: "16:00",
+      nightPostTime: "20:00",
       lateNightPostTime: "21:00",
-      midnightPostTime: "00:00",
+      midnightPostTime: "22:00",
       language: "English",
       autoApprove: false,
       instagramAccountId: instagramAccountId ?? "",
@@ -110,6 +110,207 @@ async function exchangeAndSave(
 
   return { instagramAccountId, pageName };
 }
+
+// ─── Direct Credentials Save ──────────────────────────────────────────────────
+// Allows user to paste Instagram Account ID + Access Token directly
+router.post("/config/save-credentials", async (req, res) => {
+  const body = z
+    .object({
+      instagramAccountId: z.string().min(5),
+      accessToken: z.string().min(10),
+    })
+    .safeParse(req.body);
+
+  if (!body.success) {
+    res.status(400).json({ error: "Both instagramAccountId and accessToken are required." });
+    return;
+  }
+
+  const { instagramAccountId, accessToken } = body.data;
+
+  // Verify the token works by calling the IG Graph API
+  let tokenInfo: { tokenType: string; expiresIn?: number } = { tokenType: "unknown" };
+  try {
+    const debugRes = await fetch(
+      `https://graph.facebook.com/v21.0/debug_token?input_token=${accessToken}&access_token=${accessToken}`,
+    );
+    const debugData = (await debugRes.json()) as {
+      data?: { type: string; expires_at?: number; is_valid?: boolean; error?: { message: string } };
+    };
+    if (debugData?.data?.is_valid === false) {
+      res.status(400).json({ error: `Token is invalid: ${debugData.data?.error?.message || "Unknown error"}` });
+      return;
+    }
+    if (debugData?.data) {
+      const expiresAt = debugData.data.expires_at;
+      tokenInfo = {
+        tokenType: debugData.data.type || "unknown",
+        expiresIn: expiresAt && expiresAt > 0 ? Math.round((expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24)) : undefined,
+      };
+    }
+  } catch (err) {
+    // If debug call fails, still save (token might be a system token)
+    req.log.warn({ err }, "Token debug failed — saving anyway");
+  }
+
+  const [existing] = await db.select().from(configTable).limit(1);
+  if (!existing) {
+    await db.insert(configTable).values({
+      niche: "Tamil Nadu Business & Success",
+      morningPostTime: "08:00",
+      afternoonPostTime: "12:00",
+      eveningPostTime: "16:00",
+      nightPostTime: "20:00",
+      lateNightPostTime: "21:00",
+      midnightPostTime: "22:00",
+      language: "English",
+      autoApprove: false,
+      instagramAccountId,
+      metaAccessToken: accessToken,
+    });
+  } else {
+    await db.update(configTable).set({ instagramAccountId, metaAccessToken: accessToken, updatedAt: new Date() });
+  }
+
+  req.log.info({ instagramAccountId, tokenType: tokenInfo.tokenType }, "Credentials saved directly");
+
+  res.json({
+    success: true,
+    message: tokenInfo.expiresIn
+      ? `Connected! Token expires in ~${tokenInfo.expiresIn} days.`
+      : "Credentials saved successfully. Ready to post!",
+    instagramAccountId,
+    tokenType: tokenInfo.tokenType,
+    expiresInDays: tokenInfo.expiresIn ?? null,
+  });
+});
+
+// ─── Token Refresh (extend long-lived token) ──────────────────────────────────
+router.post("/config/refresh-token", async (req, res) => {
+  const appId = process.env["META_APP_ID"];
+  const appSecret = process.env["META_APP_SECRET"];
+
+  const [config] = await db.select().from(configTable).limit(1);
+  if (!config?.metaAccessToken) {
+    res.status(400).json({ error: "No token configured. Connect your account first." });
+    return;
+  }
+
+  if (!appId || !appSecret) {
+    // Try to debug the existing token lifespan
+    try {
+      const debugRes = await fetch(
+        `https://graph.facebook.com/v21.0/debug_token?input_token=${config.metaAccessToken}&access_token=${config.metaAccessToken}`,
+      );
+      const debugData = (await debugRes.json()) as {
+        data?: { type: string; expires_at?: number; is_valid?: boolean };
+      };
+      const expiresAt = debugData?.data?.expires_at;
+      const daysLeft = expiresAt && expiresAt > 0
+        ? Math.round((expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24))
+        : null;
+
+      res.json({
+        success: false,
+        message: "META_APP_SECRET not configured — cannot refresh. Add META_APP_SECRET to Secrets to enable refresh.",
+        tokenIsValid: debugData?.data?.is_valid ?? null,
+        expiresInDays: daysLeft,
+        tokenType: debugData?.data?.type ?? null,
+      });
+    } catch {
+      res.json({
+        success: false,
+        message: "META_APP_SECRET not configured — cannot refresh. Add it to Secrets to enable refresh.",
+      });
+    }
+    return;
+  }
+
+  try {
+    // Exchange current token for new long-lived token (extends ~60 days)
+    const exchangeRes = await fetch(
+      `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${config.metaAccessToken}`,
+    );
+    const exchangeData = (await exchangeRes.json()) as {
+      access_token?: string;
+      expires_in?: number;
+      error?: { message: string };
+    };
+
+    if (!exchangeRes.ok || !exchangeData.access_token) {
+      res.status(400).json({
+        success: false,
+        error: `Refresh failed: ${exchangeData.error?.message ?? "Unknown error"}`,
+      });
+      return;
+    }
+
+    const newToken = exchangeData.access_token;
+    const expiresInSec = exchangeData.expires_in;
+    const expiresInDays = expiresInSec ? Math.round(expiresInSec / 86400) : 60;
+
+    await db.update(configTable).set({ metaAccessToken: newToken, updatedAt: new Date() });
+
+    req.log.info({ expiresInDays }, "Token refreshed successfully");
+    res.json({
+      success: true,
+      message: `Token refreshed! New token valid for ~${expiresInDays} days.`,
+      expiresInDays,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Token refresh failed");
+    res.status(500).json({ success: false, error: `Refresh failed: ${String(err)}` });
+  }
+});
+
+// ─── Token Debug (check expiry/validity) ─────────────────────────────────────
+router.get("/config/token-status", async (req, res) => {
+  const [config] = await db.select().from(configTable).limit(1);
+  if (!config?.metaAccessToken) {
+    res.json({ hasToken: false, isValid: false, message: "No token configured." });
+    return;
+  }
+
+  try {
+    const debugRes = await fetch(
+      `https://graph.facebook.com/v21.0/debug_token?input_token=${config.metaAccessToken}&access_token=${config.metaAccessToken}`,
+    );
+    const debugData = (await debugRes.json()) as {
+      data?: { type: string; expires_at?: number; is_valid?: boolean; app_id?: string };
+      error?: { message: string };
+    };
+
+    const expiresAt = debugData?.data?.expires_at;
+    const isNeverExpires = expiresAt === 0 || expiresAt === undefined;
+    const daysLeft = !isNeverExpires && expiresAt
+      ? Math.round((expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24))
+      : null;
+
+    res.json({
+      hasToken: true,
+      isValid: debugData?.data?.is_valid ?? false,
+      tokenType: debugData?.data?.type ?? "unknown",
+      expiresInDays: daysLeft,
+      neverExpires: isNeverExpires,
+      message: debugData?.data?.is_valid === false
+        ? "Token is expired or invalid — please reconnect."
+        : isNeverExpires
+        ? "Page token — never expires as long as your Facebook account is active."
+        : daysLeft !== null && daysLeft < 7
+        ? `Warning: Token expires in ${daysLeft} days. Please refresh now!`
+        : daysLeft !== null
+        ? `Token valid for ${daysLeft} more days.`
+        : "Token appears valid.",
+    });
+  } catch (err) {
+    res.json({
+      hasToken: true,
+      isValid: null,
+      message: "Could not verify token status.",
+      error: String(err),
+    });
+  }
+});
 
 router.get("/config/exchange-token-simple", async (req, res) => {
   const shortLivedToken = req.query.token as string;
@@ -182,7 +383,7 @@ router.post("/config/meta-login", async (req, res) => {
     await db.update(configTable).set({ metaAccessToken: body.data.accessToken, updatedAt: new Date() });
     res.json({
       success: true,
-      message: "Access token saved (short-lived). Configure META_APP_SECRET for a permanent token.",
+      message: "Access token saved. Configure META_APP_SECRET for a permanent token.",
       instagramAccountId: null,
       tokenType: "short_lived",
     });
@@ -202,7 +403,7 @@ router.post("/config/meta-login", async (req, res) => {
     await db.update(configTable).set({ metaAccessToken: body.data.accessToken, updatedAt: new Date() });
     res.json({
       success: true,
-      message: `Token saved (short-lived — exchange failed). It will work for ~1 hour.`,
+      message: `Token saved (short-lived — exchange failed). Will work for ~1 hour.`,
       instagramAccountId: null,
       tokenType: "short_lived_fallback",
     });
@@ -226,13 +427,13 @@ router.get("/config", async (req, res) => {
     [config] = await db
       .insert(configTable)
       .values({
-        niche: "Luxury Wealth & Success Mindset — Motivational content about financial freedom, entrepreneurship, passive income, luxury lifestyle, morning routines of high achievers, wealth-building strategies for young entrepreneurs",
-        morningPostTime: "06:00",
-        afternoonPostTime: "09:00",
-        eveningPostTime: "12:00",
-        nightPostTime: "15:00",
-        lateNightPostTime: "18:00",
-        midnightPostTime: "21:00",
+        niche: "Tamil Nadu Business, Entrepreneurship & Success — Motivational content about financial freedom, local business success stories, Tamil entrepreneurs, startup culture in Chennai/Coimbatore, election & civic awareness, IPL cricket motivation, and everyday life wisdom for Tamil youth",
+        morningPostTime: "08:00",
+        afternoonPostTime: "12:00",
+        eveningPostTime: "16:00",
+        nightPostTime: "20:00",
+        lateNightPostTime: "21:00",
+        midnightPostTime: "22:00",
         language: "English",
         autoApprove: false,
         instagramAccountId: "",
@@ -253,7 +454,20 @@ router.put("/config", async (req, res) => {
   if (!config) {
     [config] = await db
       .insert(configTable)
-      .values({ ...body, niche: body.niche || "Luxury Wealth & Success Mindset", morningPostTime: body.morningPostTime || "06:00", afternoonPostTime: body.afternoonPostTime || "09:00", eveningPostTime: body.eveningPostTime || "12:00", nightPostTime: body.nightPostTime || "15:00", lateNightPostTime: body.lateNightPostTime || "18:00", midnightPostTime: body.midnightPostTime || "21:00", language: body.language || "English", autoApprove: body.autoApprove ?? false, instagramAccountId: body.instagramAccountId || "", metaAccessToken: body.metaAccessToken || "" })
+      .values({
+        ...body,
+        niche: body.niche || "Tamil Nadu Business & Success",
+        morningPostTime: body.morningPostTime || "08:00",
+        afternoonPostTime: body.afternoonPostTime || "12:00",
+        eveningPostTime: body.eveningPostTime || "16:00",
+        nightPostTime: body.nightPostTime || "20:00",
+        lateNightPostTime: body.lateNightPostTime || "21:00",
+        midnightPostTime: body.midnightPostTime || "22:00",
+        language: body.language || "English",
+        autoApprove: body.autoApprove ?? false,
+        instagramAccountId: body.instagramAccountId || "",
+        metaAccessToken: body.metaAccessToken || "",
+      })
       .returning();
   } else {
     [config] = await db

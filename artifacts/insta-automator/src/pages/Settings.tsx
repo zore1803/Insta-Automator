@@ -10,11 +10,11 @@ import {
 } from "@workspace/api-client-react";
 import {
   Loader2, Save, Instagram, BrainCircuit, RefreshCw,
-  CheckCircle2, ExternalLink, LogIn, AlertCircle, Clock, LogOut, Link2, Sparkles, Zap
+  CheckCircle2, ExternalLink, LogIn, AlertCircle, Clock, LogOut, Link2, Sparkles, Zap, Key, ShieldCheck, Timer
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Form, FormControl, FormDescription, FormField,
+  Form, FormControl, FormField,
   FormItem, FormLabel, FormMessage
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -66,20 +66,17 @@ const configSchema = z.object({
 });
 
 type ConfigFormValues = z.infer<typeof configSchema>;
-
-type LoginResult = { success: boolean; message: string; instagramAccountId?: string | null };
+type LoginResult = { success: boolean; message: string; instagramAccountId?: string | null; tokenType?: string; expiresInDays?: number | null };
+type TokenStatus = { hasToken: boolean; isValid: boolean | null; tokenType?: string; expiresInDays: number | null; neverExpires?: boolean; message: string };
 
 function useFacebookSDK() {
   const [sdkReady, setSdkReady] = useState(false);
-
   useEffect(() => {
     if (window.FB) { setSdkReady(true); return; }
-
     window.fbAsyncInit = () => {
       window.FB!.init({ appId: META_APP_ID, version: "v21.0", xfbml: false, cookie: true });
       setSdkReady(true);
     };
-
     if (!document.getElementById("facebook-jssdk")) {
       const script = document.createElement("script");
       script.id = "facebook-jssdk";
@@ -89,7 +86,6 @@ function useFacebookSDK() {
       document.body.appendChild(script);
     }
   }, []);
-
   return sdkReady;
 }
 
@@ -104,6 +100,20 @@ export function Settings() {
   const [loginResult, setLoginResult] = useState<LoginResult | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
   const [aiProvider, setAiProvider] = useState<{ textModel: string; imageModel: string; openaiConfigured: boolean } | null>(null);
+  const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
+  const [refreshingToken, setRefreshingToken] = useState(false);
+
+  // Manual token exchange state
+  const [shortToken, setShortToken] = useState("");
+  const [appSecret, setAppSecret] = useState("");
+  const [exchanging, setExchanging] = useState(false);
+  const [exchangeResult, setExchangeResult] = useState<LoginResult | null>(null);
+
+  // Direct credentials state
+  const [directIgId, setDirectIgId] = useState("");
+  const [directToken, setDirectToken] = useState("");
+  const [savingDirect, setSavingDirect] = useState(false);
+  const [directResult, setDirectResult] = useState<LoginResult | null>(null);
 
   useEffect(() => {
     fetch("/api/config/ai-provider")
@@ -112,23 +122,27 @@ export function Settings() {
       .catch(() => null);
   }, []);
 
-  // Manual token exchange state
-  const [shortToken, setShortToken] = useState("");
-  const [appSecret, setAppSecret] = useState("");
-  const [exchanging, setExchanging] = useState(false);
-  const [exchangeResult, setExchangeResult] = useState<LoginResult | null>(null);
+  // Load token status when connected
+  useEffect(() => {
+    if (config?.metaAccessToken) {
+      fetch("/api/config/token-status")
+        .then(r => r.json())
+        .then(d => setTokenStatus(d as TokenStatus))
+        .catch(() => null);
+    }
+  }, [config?.metaAccessToken]);
 
   const form = useForm<ConfigFormValues>({
     resolver: zodResolver(configSchema),
     defaultValues: {
       niche: "",
       language: "English",
-      morningPostTime: "09:00",
+      morningPostTime: "08:00",
       afternoonPostTime: "12:00",
-      eveningPostTime: "15:00",
-      nightPostTime: "18:00",
+      eveningPostTime: "16:00",
+      nightPostTime: "20:00",
       lateNightPostTime: "21:00",
-      midnightPostTime: "00:00",
+      midnightPostTime: "22:00",
       autoApprove: false,
       instagramAccountId: "",
       metaAccessToken: "",
@@ -173,6 +187,7 @@ export function Settings() {
       if (data.success) {
         toast({ title: "Disconnected", description: "Your Instagram account has been unlinked." });
         setLoginResult(null);
+        setTokenStatus(null);
         initialized.current = false;
         queryClient.invalidateQueries({ queryKey: getGetConfigQueryKey() });
       }
@@ -188,12 +203,9 @@ export function Settings() {
       toast({ title: "Facebook SDK not ready yet, please try again in a moment", variant: "destructive" });
       return;
     }
-
-    // CRITICAL: Call FB.login immediately before ANY state updates to prevent popup blockers
     window.FB.login(async (response) => {
       setFbLoginLoading(true);
       setLoginResult(null);
-
       if (response.authResponse?.accessToken) {
         try {
           const result = await saveTokenToBackend(response.authResponse.accessToken);
@@ -227,7 +239,6 @@ export function Settings() {
     try {
       const body: Record<string, string> = { shortLivedToken: shortToken };
       if (appSecret) body["appSecret"] = appSecret;
-
       const res = await fetch("/api/config/exchange-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -254,6 +265,64 @@ export function Settings() {
     }
   };
 
+  // ── Direct credentials save ─────────────────────────────────────────────────
+  const handleSaveDirect = async () => {
+    if (!directIgId || !directToken) {
+      toast({ title: "Both fields are required", variant: "destructive" });
+      return;
+    }
+    setSavingDirect(true);
+    setDirectResult(null);
+    try {
+      const res = await fetch("/api/config/save-credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instagramAccountId: directIgId, accessToken: directToken }),
+      });
+      const data = await res.json() as LoginResult & { error?: string };
+      if (!res.ok || !(data as { success?: boolean }).success) {
+        const msg = (data as { error?: string }).error ?? "Save failed";
+        setDirectResult({ success: false, message: msg });
+        toast({ title: "Save failed", description: msg, variant: "destructive" });
+      } else {
+        setDirectResult({ success: true, message: data.message, instagramAccountId: data.instagramAccountId, expiresInDays: data.expiresInDays });
+        toast({ title: "Connected!", description: data.message });
+        initialized.current = false;
+        queryClient.invalidateQueries({ queryKey: getGetConfigQueryKey() });
+        setDirectIgId("");
+        setDirectToken("");
+      }
+    } catch (err) {
+      setDirectResult({ success: false, message: String(err) });
+      toast({ title: "Network error", description: String(err), variant: "destructive" });
+    } finally {
+      setSavingDirect(false);
+    }
+  };
+
+  // ── Token refresh ───────────────────────────────────────────────────────────
+  const handleRefreshToken = async () => {
+    setRefreshingToken(true);
+    try {
+      const res = await fetch("/api/config/refresh-token", { method: "POST" });
+      const data = await res.json() as { success: boolean; message: string; expiresInDays?: number };
+      if (data.success) {
+        toast({ title: "Token refreshed!", description: data.message });
+        // Reload token status
+        fetch("/api/config/token-status")
+          .then(r => r.json())
+          .then(d => setTokenStatus(d as TokenStatus))
+          .catch(() => null);
+      } else {
+        toast({ title: "Refresh failed", description: data.message, variant: "destructive" });
+      }
+    } catch (err) {
+      toast({ title: "Network error", description: String(err), variant: "destructive" });
+    } finally {
+      setRefreshingToken(false);
+    }
+  };
+
   const onSubmit = (data: ConfigFormValues) => {
     updateConfig.mutate({ data }, {
       onSuccess: () => {
@@ -274,6 +343,8 @@ export function Settings() {
   const hasIgAccount = !!config?.instagramAccountId;
   const isConnected = hasToken && hasIgAccount;
 
+  const tokenWarning = tokenStatus?.expiresInDays !== null && tokenStatus?.expiresInDays !== undefined && tokenStatus.expiresInDays < 7;
+
   return (
     <div className="space-y-10 pb-10">
       <div className="space-y-1">
@@ -291,7 +362,7 @@ export function Settings() {
                 Instagram Connection
               </CardTitle>
               <CardDescription className="text-base">
-                Link your Facebook Page and Instagram Business account to publish posts.
+                Link your Instagram Business account to publish posts automatically.
               </CardDescription>
             </div>
             <Badge
@@ -311,28 +382,132 @@ export function Settings() {
 
           {/* Connected state banner */}
           {isConnected && (
-            <div className="rounded-2xl border border-green-500/20 bg-green-500/10 p-5 flex items-center justify-between gap-4 flex-wrap">
-              <div className="flex items-center gap-4">
-                <div className="w-11 h-11 rounded-xl bg-green-500/20 flex items-center justify-center shrink-0">
-                  <CheckCircle2 className="h-6 w-6 text-green-500" />
+            <div className="rounded-2xl border border-green-500/20 bg-green-500/10 p-5 space-y-3">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-4">
+                  <div className="w-11 h-11 rounded-xl bg-green-500/20 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="h-6 w-6 text-green-500" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-green-600">Account linked successfully</p>
+                    <p className="text-sm text-muted-foreground">Instagram ID: <span className="font-mono text-green-600/80">{config?.instagramAccountId}</span></p>
+                  </div>
                 </div>
-                <div>
-                  <p className="font-bold text-green-600">Account linked successfully</p>
-                  <p className="text-sm text-muted-foreground">Instagram ID: <span className="font-mono text-green-600/80">{config?.instagramAccountId}</span></p>
+                <div className="flex gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRefreshToken}
+                    disabled={refreshingToken}
+                    className="border-blue-500/20 text-blue-400 hover:bg-blue-500/10 hover:border-blue-500/40 rounded-xl h-10 px-4"
+                  >
+                    {refreshingToken ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                    {refreshingToken ? "Refreshing..." : "Extend Token"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDisconnect}
+                    disabled={disconnecting}
+                    className="border-red-500/20 text-red-500 hover:bg-red-500/10 hover:border-red-500/40 rounded-xl h-10 px-5"
+                  >
+                    {disconnecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <LogOut className="h-4 w-4 mr-2" />}
+                    {disconnecting ? "Disconnecting..." : "Disconnect"}
+                  </Button>
                 </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDisconnect}
-                disabled={disconnecting}
-                className="border-red-500/20 text-red-500 hover:bg-red-500/10 hover:border-red-500/40 rounded-xl h-10 px-5"
-              >
-                {disconnecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <LogOut className="h-4 w-4 mr-2" />}
-                {disconnecting ? "Disconnecting..." : "Disconnect"}
-              </Button>
+
+              {/* Token status */}
+              {tokenStatus && (
+                <div className={`rounded-xl p-3 flex items-center gap-3 text-sm ${
+                  tokenStatus.neverExpires ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20"
+                  : tokenWarning ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
+                  : "bg-white/5 text-muted-foreground border border-white/10"
+                }`}>
+                  {tokenStatus.neverExpires ? <ShieldCheck className="h-4 w-4 shrink-0" />
+                    : tokenWarning ? <AlertCircle className="h-4 w-4 shrink-0" />
+                    : <Timer className="h-4 w-4 shrink-0" />}
+                  <span className="font-medium">{tokenStatus.message}</span>
+                </div>
+              )}
             </div>
           )}
+
+          {/* ── SECTION 1: Direct Credentials (most important for user) ── */}
+          <div className="rounded-2xl border border-primary/20 bg-primary/5 p-6 space-y-4">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                <Key className="text-primary h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-bold text-lg">Direct Connect — Paste Your Credentials</p>
+                <p className="text-sm text-muted-foreground">
+                  Have your Instagram Business Account ID and Access Token? Paste them here directly.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Instagram Business Account ID</label>
+                <Input
+                  className="h-12 bg-white/5 border-white/10 rounded-xl font-mono text-sm"
+                  placeholder="e.g. 17841400000000000"
+                  value={directIgId}
+                  onChange={e => setDirectIgId(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Access Token</label>
+                <Input
+                  type="password"
+                  className="h-12 bg-white/5 border-white/10 rounded-xl font-mono text-sm"
+                  placeholder="EAABxxxx... or System User Token"
+                  value={directToken}
+                  onChange={e => setDirectToken(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 rounded-xl p-3 bg-white/5 border border-white/10 text-xs text-muted-foreground">
+              <ExternalLink className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
+              <span>
+                Get your Instagram Business Account ID from: <strong>Facebook Graph API Explorer</strong> → search for <code className="bg-white/10 px-1 rounded">me/accounts</code> → then check <code className="bg-white/10 px-1 rounded">instagram_business_account</code> on your Page.
+                Or use a <strong>System User Token</strong> from Meta Business Manager for tokens that never expire.
+                &nbsp;<a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Open Graph Explorer →</a>
+              </span>
+            </div>
+
+            {directResult && (
+              <div className={`flex items-start gap-3 rounded-xl p-4 text-sm ${directResult.success ? "bg-green-500/10 text-green-600 border border-green-500/20" : "bg-red-500/10 text-red-600 border border-red-500/20"}`}>
+                {directResult.success ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : <AlertCircle className="h-5 w-5 shrink-0" />}
+                <div>
+                  <span className="font-medium">{directResult.message}</span>
+                  {directResult.expiresInDays && (
+                    <p className="text-xs opacity-75 mt-1">Token valid for ~{directResult.expiresInDays} more days.</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <Button
+              onClick={handleSaveDirect}
+              disabled={savingDirect || !directIgId || !directToken}
+              size="lg"
+              className="h-12 px-8 rounded-xl w-full sm:w-auto"
+            >
+              {savingDirect ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <CheckCircle2 className="h-5 w-5 mr-2" />}
+              {savingDirect ? "Saving & Verifying..." : "Save & Connect"}
+            </Button>
+          </div>
+
+          {/* Divider */}
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/5" /></div>
+            <div className="relative flex justify-center text-[10px] uppercase font-bold tracking-widest">
+              <span className="bg-background px-4 text-muted-foreground">Or connect via Facebook OAuth</span>
+            </div>
+          </div>
 
           {/* One-click Facebook Login */}
           <div className="rounded-2xl border border-white/10 bg-white/5 p-6 space-y-4">
@@ -342,15 +517,13 @@ export function Settings() {
               </div>
               <div>
                 <p className="font-bold text-lg">{isConnected ? "Reconnect with Facebook" : "Connect with Facebook"}</p>
-                <p className="text-sm text-muted-foreground">The most reliable way to connect. We never see your password.</p>
+                <p className="text-sm text-muted-foreground">One-click OAuth. We never see your password.</p>
               </div>
             </div>
 
             {loginResult && (
               <div className={`flex items-start gap-3 rounded-xl p-4 text-sm ${loginResult.success ? "bg-green-500/10 text-green-600 border border-green-500/20" : "bg-red-500/10 text-red-600 border border-red-500/20"}`}>
-                {loginResult.success
-                  ? <CheckCircle2 className="h-5 w-5 shrink-0" />
-                  : <AlertCircle className="h-5 w-5 shrink-0" />}
+                {loginResult.success ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : <AlertCircle className="h-5 w-5 shrink-0" />}
                 <span className="font-medium">{loginResult.message}</span>
               </div>
             )}
@@ -361,26 +534,23 @@ export function Settings() {
               size="lg"
               className="bg-[#1877F2] hover:bg-[#1877F2]/90 text-white w-full sm:w-auto h-12 px-8 rounded-xl shadow-lg shadow-[#1877F2]/20"
             >
-              {fbLoginLoading
-                ? <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                : <LogIn className="h-5 w-5 mr-2" />}
+              {fbLoginLoading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <LogIn className="h-5 w-5 mr-2" />}
               {fbLoginLoading ? "Authorizing..." : sdkReady ? (isConnected ? "Reconnect with Facebook" : "Connect with Facebook") : "Initializing SDK..."}
             </Button>
           </div>
 
-          {/* Divider */}
+          {/* Advanced Manual Token */}
           <div className="relative">
             <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/5" /></div>
             <div className="relative flex justify-center text-[10px] uppercase font-bold tracking-widest">
-              <span className="bg-background px-4 text-muted-foreground">Advanced — Manual Token</span>
+              <span className="bg-background px-4 text-muted-foreground">Advanced — Exchange Short-Lived Token</span>
             </div>
           </div>
 
-          {/* Manual token paste */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium text-muted-foreground">
-                Paste a token manually if the button above doesn't work
+                Paste a short-lived token to convert it to a 60-day long-lived token
               </p>
               <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer"
                 className="text-xs text-primary hover:underline inline-flex items-center gap-1 font-bold">
@@ -391,7 +561,7 @@ export function Settings() {
               <div className="sm:col-span-2 space-y-2">
                 <Input
                   className="h-12 bg-white/5 border-white/10 rounded-xl"
-                  placeholder="System Access Token (EAAB...)"
+                  placeholder="Short-lived token (EAAB...)"
                   value={shortToken}
                   onChange={e => setShortToken(e.target.value)}
                 />
@@ -409,16 +579,14 @@ export function Settings() {
 
             {exchangeResult && (
               <div className={`flex items-start gap-3 rounded-xl p-4 text-sm ${exchangeResult.success ? "bg-green-500/10 text-green-600 border border-green-500/20" : "bg-red-500/10 text-red-600 border border-red-500/20"}`}>
-                {exchangeResult.success
-                  ? <CheckCircle2 className="h-5 w-5 shrink-0" />
-                  : <AlertCircle className="h-5 w-5 shrink-0" />}
+                {exchangeResult.success ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : <AlertCircle className="h-5 w-5 shrink-0" />}
                 <span className="font-medium">{exchangeResult.message}</span>
               </div>
             )}
 
             <Button onClick={handleExchangeToken} disabled={exchanging} variant="outline" className="h-11 rounded-xl border-white/10 hover:bg-white/5">
               {exchanging ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-              {exchanging ? "Connecting..." : "Connect with Token"}
+              {exchanging ? "Converting..." : "Convert to Long-Lived Token"}
             </Button>
           </div>
         </CardContent>
@@ -456,9 +624,7 @@ export function Settings() {
                   <div className={`rounded-xl border p-4 text-sm flex items-start gap-3 ${aiProvider.openaiConfigured
                     ? "bg-violet-500/10 border-violet-500/20 text-violet-300"
                     : "bg-amber-500/8 border-amber-500/20 text-amber-400"}`}>
-                    {aiProvider.openaiConfigured
-                      ? <Sparkles className="h-4 w-4 shrink-0 mt-0.5" />
-                      : <Zap className="h-4 w-4 shrink-0 mt-0.5" />}
+                    {aiProvider.openaiConfigured ? <Sparkles className="h-4 w-4 shrink-0 mt-0.5" /> : <Zap className="h-4 w-4 shrink-0 mt-0.5" />}
                     <div>
                       {aiProvider.openaiConfigured ? (
                         <>
@@ -478,10 +644,10 @@ export function Settings() {
                   <FormItem>
                     <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Niche & Tone</FormLabel>
                     <FormControl>
-                      <Textarea 
-                        placeholder="e.g. Luxury real estate in Dubai, focused on high-net-worth investors..."
-                        className="min-h-[120px] bg-white/5 border-white/10 rounded-xl focus:border-primary/50" 
-                        {...field} 
+                      <Textarea
+                        placeholder="e.g. Tamil Nadu business & entrepreneurship — success stories, election awareness, local startup culture, Chennai youth motivation..."
+                        className="min-h-[120px] bg-white/5 border-white/10 rounded-xl focus:border-primary/50"
+                        {...field}
                       />
                     </FormControl>
                     <FormMessage />
@@ -491,7 +657,7 @@ export function Settings() {
                   <FormItem>
                     <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Output Language</FormLabel>
                     <FormControl>
-                      <Input className="h-12 bg-white/5 border-white/10 rounded-xl" placeholder="English" {...field} />
+                      <Input className="h-12 bg-white/5 border-white/10 rounded-xl" placeholder="English / Tamil / Tanglish" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -506,131 +672,81 @@ export function Settings() {
                   <Clock className="h-6 w-6 text-primary" />
                   Smart Scheduler
                 </CardTitle>
-                <CardDescription>Optimize your posting times for maximum engagement.</CardDescription>
+                <CardDescription>Set posting times for maximum engagement. Enable Auto-Approve to publish without manual review.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-8">
                 <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                   <FormField control={form.control} name="morningPostTime" render={({ field }: { field: any }) => (
                     <FormItem>
-                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Morning slot</FormLabel>
-                      <FormControl>
-                        <Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} />
-                      </FormControl>
+                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Morning</FormLabel>
+                      <FormControl><Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="afternoonPostTime" render={({ field }: { field: any }) => (
                     <FormItem>
-                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Afternoon slot</FormLabel>
-                      <FormControl>
-                        <Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} />
-                      </FormControl>
+                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Afternoon</FormLabel>
+                      <FormControl><Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="eveningPostTime" render={({ field }: { field: any }) => (
                     <FormItem>
-                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Evening slot</FormLabel>
-                      <FormControl>
-                        <Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} />
-                      </FormControl>
+                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Evening</FormLabel>
+                      <FormControl><Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="nightPostTime" render={({ field }: { field: any }) => (
                     <FormItem>
-                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Night slot</FormLabel>
-                      <FormControl>
-                        <Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} />
-                      </FormControl>
+                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Night</FormLabel>
+                      <FormControl><Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="lateNightPostTime" render={({ field }: { field: any }) => (
                     <FormItem>
                       <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Late Night</FormLabel>
-                      <FormControl>
-                        <Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} />
-                      </FormControl>
+                      <FormControl><Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="midnightPostTime" render={({ field }: { field: any }) => (
                     <FormItem>
-                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Midnight</FormLabel>
-                      <FormControl>
-                        <Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} />
-                      </FormControl>
+                      <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Extra Slot</FormLabel>
+                      <FormControl><Input type="time" className="h-12 bg-white/5 border-white/10 rounded-xl" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
                 </div>
-                
-                <FormField control={form.control} name="autoApprove" render={({ field }: { field: any }) => (
-                  <FormItem className="flex flex-row items-center justify-between rounded-2xl border border-white/10 p-5 bg-white/5">
-                    <div className="space-y-0.5">
-                      <FormLabel className="text-base font-bold">Full Automation</FormLabel>
-                      <FormDescription className="text-xs">
-                        Bypass approval queue. Posts go live instantly.
-                      </FormDescription>
-                    </div>
-                    <FormControl>
-                      <Switch 
-                        checked={field.value} 
-                        onCheckedChange={field.onChange}
-                        className="data-[state=checked]:bg-primary" 
-                      />
-                    </FormControl>
-                  </FormItem>
-                )} />
+
+                <div className="space-y-4 pt-4 border-t border-white/5">
+                  <FormField control={form.control} name="autoApprove" render={({ field }: { field: any }) => (
+                    <FormItem className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 p-5">
+                      <div className="space-y-1">
+                        <FormLabel className="text-base font-bold">Auto-Approve & Publish</FormLabel>
+                        <p className="text-sm text-muted-foreground">
+                          Posts publish automatically without manual review. Enable this to actually post on schedule.
+                        </p>
+                      </div>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                          className="data-[state=checked]:bg-primary"
+                        />
+                      </FormControl>
+                    </FormItem>
+                  )} />
+                </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Manual Credentials Override Card */}
-          <Card className="glass-card border-primary/20 bg-gradient-to-br from-violet-500/[0.03] to-fuchsia-500/[0.03]">
-            <CardHeader className="pb-6">
-              <CardTitle className="text-xl flex items-center gap-3">
-                <AlertCircle className="h-6 w-6 text-primary" />
-                Direct API Credentials
-              </CardTitle>
-              <CardDescription>If the automated Facebook connection fails or is blocked, enter your credentials directly here.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid gap-6 sm:grid-cols-2">
-                <FormField control={form.control} name="instagramAccountId" render={({ field }: { field: any }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Instagram Account ID</FormLabel>
-                    <FormControl>
-                      <Input className="h-12 bg-white/5 border-white/10 rounded-xl" placeholder="e.g. 178414... " {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={form.control} name="metaAccessToken" render={({ field }: { field: any }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Meta Access Token</FormLabel>
-                    <FormControl>
-                      <Input type="password" className="h-12 bg-white/5 border-white/10 rounded-xl" placeholder="EAAB..." {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="flex justify-end pt-4">
-            <Button 
-              type="submit" 
-              size="lg" 
-              className="min-w-[220px] h-14 rounded-2xl shadow-xl shadow-primary/20 bg-primary hover:bg-primary/90 font-bold text-lg" 
-              disabled={updateConfig.isPending}
-            >
-              {updateConfig.isPending
-                ? <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                : <Save className="h-5 w-5 mr-2" />}
-              Save All Settings
+          <div className="flex gap-4">
+            <Button type="submit" disabled={updateConfig.isPending} size="lg" className="h-12 px-10 rounded-xl">
+              {updateConfig.isPending ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <Save className="h-5 w-5 mr-2" />}
+              {updateConfig.isPending ? "Saving..." : "Save Settings"}
             </Button>
           </div>
         </form>
