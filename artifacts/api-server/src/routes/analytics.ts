@@ -132,7 +132,7 @@ router.get("/analytics/posts-insights", async (req, res) => {
 router.get("/analytics/trending", async (_req, res) => {
   try {
     const { getTrendingTopics } = await import("../services/trendingService.js");
-    const topics = await getTrendingTopics(6);
+    const topics = await getTrendingTopics(12, "India Instagram trends");
     res.json({ topics });
   } catch (err) {
     res.status(500).json({ error: String(err) });

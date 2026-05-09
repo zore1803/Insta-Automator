@@ -23,6 +23,20 @@ const PublishPostParams = z.object({ id: z.coerce.number() });
 const ApprovePostParams = z.object({ id: z.coerce.number() });
 const RejectPostParams = z.object({ id: z.coerce.number() });
 
+function isLiveEventNiche(niche: string): boolean {
+  return /\b(ipl|cricket|match|score|t20|odi|test match|sports?|football|league|tournament|cup|icc|game day|bcci|wicket|batting|bowling)\b/i.test(niche);
+}
+
+function buildImageSearchQuery(niche: string, subject: string): string {
+  const suffix = isLiveEventNiche(niche) ? "cricket match real photo India" : "real photo India";
+  return `${niche} ${subject} ${suffix}`.trim();
+}
+
+function normalizeLegacyNiche(niche: string): string {
+  const value = niche.toLowerCase();
+  return value === "fitness" || value.includes("tamil nadu business") ? "India Instagram trends" : niche;
+}
+
 router.get("/posts", async (req, res) => {
   const query = ListPostsQueryParams.parse(req.query);
   const conditions: any[] = [];
@@ -63,11 +77,12 @@ router.post("/posts/generate", async (req, res) => {
     // If a specific topic was requested, find it; otherwise let the service pick
     let forcedTopic;
     if (topicTitle) {
-      const topics = await getTrendingTopics(10);
+      const topics = await getTrendingTopics(20, config.niche);
       forcedTopic = topics.find((t) => t.title === topicTitle);
     }
 
-    const content = await generateInstagramContent(config.niche, config.language, type, forcedTopic);
+    const recentCaptions = await getRecentCaptions();
+    const content = await generateInstagramContent(config.niche, config.language, type, forcedTopic, { recentCaptions });
 
     if (!content.caption || !content.imagePrompt) {
       req.log.error({ content }, "AI returned invalid content structure");
@@ -75,10 +90,10 @@ router.post("/posts/generate", async (req, res) => {
       return;
     }
 
-    // Use the trending topic's search query for image search (more specific than generic)
+    // Anchor image search to the account niche to prevent off-niche images
     const trending = content.trendingTopic;
-    const smartImageQuery = trending?.imageQuery || content.searchQuery || content.imagePrompt;
-    const subject = content.captionSubject || trending?.title;
+    const subject = `${config.niche}: ${content.captionSubject || trending?.title || ""}`;
+    const smartImageQuery = buildImageSearchQuery(config.niche, content.captionSubject || trending?.title || "");
 
     // Determine effective image source — body overrides config
     const effectiveImageSource = imageSource || config.imageSource || "ai";
@@ -88,8 +103,7 @@ router.post("/posts/generate", async (req, res) => {
     let mediaUrls: string[] = [];
 
     if (type === "reels") {
-      // Fix: pass niche as 2nd arg, imageSource as 3rd arg
-      const reelData = await generateReelVideo(content.imagePrompt, config.niche, effectiveImageSource);
+      const reelData = await generateReelVideo(content.imagePrompt, config.niche, effectiveImageSource, subject);
       imageUrl = reelData.imageUrl;
       videoUrl = reelData.videoUrl;
     } else if (type === "carousel") {
@@ -118,6 +132,10 @@ router.post("/posts/generate", async (req, res) => {
       imageUrl = mediaUrls[0] || "";
     } else {
       imageUrl = await generatePostImage(content.imagePrompt, smartImageQuery, effectiveImageSource, subject);
+    }
+
+    if (!imageUrl) {
+      throw new Error("No usable image was generated or found. Check your image/search API keys and try again.");
     }
 
     const scheduledFor = getNextScheduleTime(config);
@@ -154,7 +172,13 @@ router.post("/posts/:id/regenerate-caption", async (req, res) => {
 
   try {
     const { generateInstagramContent } = await import("../services/claudeService.js");
-    const content = await generateInstagramContent(config.niche, config.language, existing.mediaType as any);
+    const recentCaptions = await getRecentCaptions(id);
+    const content = await generateInstagramContent(config.niche, config.language, existing.mediaType as any, undefined, {
+      existingImagePrompt: existing.imagePrompt,
+      existingImageUrl: existing.imageUrl,
+      existingCaption: existing.caption,
+      recentCaptions,
+    });
 
     const [updated] = await db
       .update(postsTable)
@@ -270,7 +294,7 @@ async function getConfig() {
   const [config] = await db.select().from(configTable).limit(1);
   if (!config) {
     return {
-      niche: "Indian current affairs, trending news, Maharashtra business",
+      niche: "India Instagram trends",
       morningPostTime: "08:00",
       afternoonPostTime: "12:00",
       eveningPostTime: "16:00",
@@ -281,10 +305,21 @@ async function getConfig() {
       autoApprove: false,
       instagramAccountId: "",
       metaAccessToken: "",
-      imageSource: "ai",
+      imageSource: "search",
     };
   }
-  return config;
+  return { ...config, niche: normalizeLegacyNiche(config.niche) };
+}
+
+async function getRecentCaptions(excludeId?: number): Promise<string[]> {
+  const conditions = excludeId ? ne(postsTable.id, excludeId) : undefined;
+  const rows = await db
+    .select({ caption: postsTable.caption })
+    .from(postsTable)
+    .where(conditions as any)
+    .orderBy(desc(postsTable.createdAt))
+    .limit(8);
+  return rows.map((row) => row.caption).filter(Boolean);
 }
 
 function getNextScheduleTime(config: {

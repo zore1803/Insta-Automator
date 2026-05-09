@@ -80,26 +80,22 @@ const CURATED_VIDEOS = [
 ];
 
 // ─── Build niche-relevant video search queries ────────────────────────────────
-function buildVideoQuery(niche: string, imagePrompt: string): string {
-  const nicheWords = niche.toLowerCase();
-  if (nicheWords.includes("wealth") || nicheWords.includes("money") || nicheWords.includes("finance")) {
-    return "luxury lifestyle wealth success city";
-  }
-  if (nicheWords.includes("fitness") || nicheWords.includes("health")) {
-    return "fitness workout motivation gym athlete";
-  }
-  if (nicheWords.includes("entrepreneur") || nicheWords.includes("business")) {
-    return "entrepreneur business office success technology";
-  }
-  if (nicheWords.includes("travel") || nicheWords.includes("lifestyle")) {
-    return "luxury travel destination adventure cinematic";
-  }
-  if (nicheWords.includes("fashion") || nicheWords.includes("style")) {
-    return "fashion luxury style aesthetic portrait";
-  }
-  // Extract first few meaningful words from image prompt
-  const words = imagePrompt.split(" ").slice(0, 4).join(" ");
-  return `${words} cinematic`;
+function buildVideoQuery(niche: string, imagePrompt: string, subject?: string): string {
+  const source = `${subject || ""} ${imagePrompt} ${niche}`
+    .replace(/[^a-zA-Z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const stopWords = new Set([
+    "real", "photo", "video", "style", "authentic", "vertical", "cinematic", "instagram",
+    "reel", "prompt", "people", "scene", "image", "with", "and", "the", "for", "from",
+  ]);
+  const keywords = source
+    .split(" ")
+    .filter((word) => word.length > 2 && !stopWords.has(word.toLowerCase()))
+    .slice(0, 8);
+
+  if (keywords.length >= 3) return `${keywords.join(" ")} vertical documentary`;
+  return `${niche} ${subject || imagePrompt} vertical reel footage`.slice(0, 120);
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -107,8 +103,9 @@ export async function generateReelVideo(
   prompt: string,
   niche: string,
   imageSourceOverride?: string,
+  subject?: string,
 ): Promise<{ imageUrl: string; videoUrl: string; audioTrack?: string }> {
-  const searchQuery = buildVideoQuery(niche, prompt);
+  const searchQuery = buildVideoQuery(niche, prompt, subject);
   logger.info({ searchQuery }, "Searching for reel video");
 
   // Pick a random viral audio track

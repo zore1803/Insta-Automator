@@ -2,7 +2,7 @@ import { pgTable, serial, text, boolean, timestamp } from "drizzle-orm/pg-core";
 
 export const configTable = pgTable("config", {
   id: serial("id").primaryKey(),
-  niche: text("niche").notNull().default("fitness"),
+  niche: text("niche").notNull().default("India Instagram trends"),
   morningPostTime: text("morning_post_time").notNull().default("09:00"),
   afternoonPostTime: text("afternoon_post_time").notNull().default("12:00"),
   eveningPostTime: text("evening_post_time").notNull().default("15:00"),

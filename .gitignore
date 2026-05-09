@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local secrets and Codex runtime files
+.env
+.codex-run/

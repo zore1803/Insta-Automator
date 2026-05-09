@@ -1,4 +1,4 @@
-import { db, postsTable, configTable, eq, and, lte, sql } from "@workspace/db";
+import { db, postsTable, configTable, eq, and, lte, sql, desc } from "@workspace/db";
 import { generateInstagramContent } from "../services/claudeService.js";
 import { generatePostImage } from "../services/imageService.js";
 import { generateReelVideo } from "../services/videoService.js";
@@ -30,6 +30,20 @@ function getSmartContentType(): "image" | "carousel" | "reels" {
   return "image";                     // 30% — consistent baseline
 }
 
+function isLiveEventNiche(niche: string): boolean {
+  return /\b(ipl|cricket|match|score|t20|odi|test match|sports?|football|league|tournament|cup|icc|game day|bcci|wicket|batting|bowling)\b/i.test(niche);
+}
+
+function buildImageSearchQuery(niche: string, subject: string): string {
+  const suffix = isLiveEventNiche(niche) ? "cricket match real photo India" : "real photo India";
+  return `${niche} ${subject} ${suffix}`.trim();
+}
+
+function normalizeLegacyNiche(niche: string): string {
+  const value = niche.toLowerCase();
+  return value === "fitness" || value.includes("tamil nadu business") ? "India Instagram trends" : niche;
+}
+
 function ensureMinSlides(prompts: string[], queries: string[], defaultQuery: string, subject: string, min: number) {
   const p = [...prompts];
   const q = [...queries];
@@ -49,14 +63,16 @@ async function generateScheduledContent(): Promise<void> {
   if (!config) return;
 
   const type = getSmartContentType();
-  const trending = await getOneTrendingTopic();
+  const activeNiche = normalizeLegacyNiche(config.niche);
+  const trending = await getOneTrendingTopic(activeNiche);
   logger.info({ topic: trending.title, type }, "Scheduler: generating content for trending topic");
 
   try {
-    const content = await generateInstagramContent(config.niche, config.language, type, trending);
+    const recentCaptions = await getRecentCaptions();
+    const content = await generateInstagramContent(activeNiche, config.language, type, trending, { recentCaptions });
     const effectiveSource = config.imageSource || "ai";
-    const smartQuery = trending.imageQuery || content.searchQuery || "";
-    const subject = content.captionSubject || trending.title;
+    const subject = `${activeNiche}: ${content.captionSubject || trending.title}`;
+    const smartQuery = buildImageSearchQuery(activeNiche, content.captionSubject || trending.title);
 
     let imageUrl = "";
     let videoUrl: string | undefined;
@@ -64,7 +80,7 @@ async function generateScheduledContent(): Promise<void> {
 
     if (type === "reels") {
       // Fix: pass niche as 2nd arg, imageSource as 3rd arg (was passing imageSource as niche before!)
-      const reel = await generateReelVideo(content.imagePrompt, config.niche, effectiveSource);
+      const reel = await generateReelVideo(content.imagePrompt, activeNiche, effectiveSource, subject);
       imageUrl = reel.imageUrl;
       videoUrl = reel.videoUrl;
     } else if (type === "carousel") {
@@ -88,6 +104,10 @@ async function generateScheduledContent(): Promise<void> {
       imageUrl = await generatePostImage(content.imagePrompt, smartQuery, effectiveSource, subject);
     }
 
+    if (!imageUrl) {
+      throw new Error("No usable image was generated or found for scheduled content.");
+    }
+
     const status = config.autoApprove ? "approved" : "pending";
 
     await db.insert(postsTable).values({
@@ -106,6 +126,15 @@ async function generateScheduledContent(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "Scheduler: content generation failed");
   }
+}
+
+async function getRecentCaptions(): Promise<string[]> {
+  const rows = await db
+    .select({ caption: postsTable.caption })
+    .from(postsTable)
+    .orderBy(desc(postsTable.createdAt))
+    .limit(8);
+  return rows.map((row) => row.caption).filter(Boolean);
 }
 
 async function recoverStaleClaims(): Promise<void> {

@@ -10,6 +10,7 @@ import {
   useUpdatePost,
   useGetConfig,
   useUpdateConfig,
+  getGetConfigQueryKey,
   getGetTodaysPostsQueryKey,
   getGetStatsQueryKey,
   getListPostsQueryKey
@@ -19,10 +20,11 @@ import {
   Loader2, Check, X, Send, Clock, Image as ImageIcon,
   Edit3, Save, CheckCircle2, Film, Layout, Sparkles,
   TrendingUp, Eye, BarChart2, Upload, RefreshCw, Zap,
-  Flame, ChevronRight, RotateCcw, MessageCircle
+  Flame, ChevronRight, RotateCcw, Maximize2, ChevronLeft
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 
@@ -78,12 +80,19 @@ export function Dashboard() {
   const [localImageSource, setLocalImageSource] = useState<"ai" | "search" | null>(null);
   const [trendingTopics, setTrendingTopics] = useState<TrendingTopic[]>([]);
   const [loadingTrending, setLoadingTrending] = useState(false);
-  const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
+  const [selectedTopic, setSelectedTopic] = useState<TrendingTopic | null>(null);
   const [accountInsights, setAccountInsights] = useState<AccountInsights | null>(null);
   const [loadingInsights, setLoadingInsights] = useState(false);
   const [showInsights, setShowInsights] = useState(false);
+  const [previewPost, setPreviewPost] = useState<any | null>(null);
+  const [customNiche, setCustomNiche] = useState("");
 
   const activeSource = localImageSource ?? (config?.imageSource as "ai" | "search" | null) ?? "ai";
+  const activeNiche = customNiche.trim() || config?.niche || "";
+
+  useEffect(() => {
+    if (config?.niche) setCustomNiche(config.niche);
+  }, [config?.niche]);
 
   // Load trending topics on mount
   useEffect(() => {
@@ -109,6 +118,23 @@ export function Dashboard() {
     setLoadingTrending(false);
   };
 
+  const handleSaveNiche = () => {
+    const niche = customNiche.trim();
+    if (niche.length < 2) {
+      toast({ title: "Add a niche", description: "Niche must be at least 2 characters.", variant: "destructive" });
+      return;
+    }
+
+    updateConfig.mutate({ data: { niche } } as any, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetConfigQueryKey() });
+        toast({ title: "Niche updated", description: "New captions will use this custom niche." });
+        fetchTrending();
+      },
+      onError: (err: any) => toast({ title: "Could not save niche", description: String(err?.message || err), variant: "destructive" }),
+    });
+  };
+
   const fetchInsights = async () => {
     setLoadingInsights(true);
     try {
@@ -124,13 +150,12 @@ export function Dashboard() {
     queryClient.invalidateQueries({ queryKey: getListPostsQueryKey() });
   };
 
-  const handleGenerate = (type: "image" | "reels" | "carousel", topicTitle?: string) => {
+  const handleGenerate = (type: "image" | "reels" | "carousel") => {
     setGeneratingType(type);
-    generatePost.mutate({ data: { type, imageSource: activeSource, topicTitle } } as any, {
+    generatePost.mutate({ data: { type, imageSource: activeSource } } as any, {
       onSuccess: () => {
         toast({ title: `${type === "reels" ? "Reel" : type === "carousel" ? "Carousel" : "Post"} generated!` });
         invalidate();
-        setSelectedTopic(null);
       },
       onError: (err: any) => toast({ title: "Generation failed", description: String(err?.message || err), variant: "destructive" }),
       onSettled: () => setGeneratingType(null),
@@ -192,6 +217,30 @@ export function Dashboard() {
           </p>
         </div>
 
+        <div className="w-full sm:w-[420px]">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold mb-1">Custom Niche</p>
+          <div className="flex gap-2">
+            <Input
+              value={customNiche}
+              onChange={(e) => setCustomNiche(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveNiche();
+              }}
+              className="h-10 rounded-xl bg-muted border-border/70 text-xs"
+              placeholder="Example: IPL cricket analysis for Chennai fans"
+            />
+            <Button
+              onClick={handleSaveNiche}
+              disabled={updateConfig.isPending || customNiche.trim() === (config?.niche || "").trim()}
+              className="h-10 rounded-xl ig-gradient border-0 text-white px-4"
+              title="Save niche"
+            >
+              {updateConfig.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-1 truncate">Active: {activeNiche || "No niche set"}</p>
+        </div>
+
         {/* Source Toggle */}
         <div className="flex flex-col items-end gap-1">
           <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">Image Source</p>
@@ -221,9 +270,17 @@ export function Dashboard() {
           <div className="flex items-center gap-2">
             <Flame className="h-4 w-4 text-orange-400 fill-orange-400/30" />
             <span className="text-sm font-bold text-foreground">Trending in India</span>
-            <Badge variant="outline" className="text-[10px] text-orange-400 border-orange-500/30 px-2 py-0">
-              Click to generate
-            </Badge>
+            <button
+              onClick={() => {
+                if (!loadingTrending) {
+                  fetchTrending();
+                }
+              }}
+              disabled={loadingTrending}
+              className="text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-orange-500/40 text-orange-400 hover:bg-orange-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {loadingTrending ? "Finding..." : "Auto-Generate Niches"}
+            </button>
           </div>
           <button
             onClick={fetchTrending}
@@ -245,42 +302,57 @@ export function Dashboard() {
                 <button
                   key={idx}
                   onClick={() => {
-                    setSelectedTopic(topic.title);
-                    handleGenerate("image", topic.title);
+                    setSelectedTopic(topic);
                   }}
-                  disabled={!!generatingType}
-                  className={`group flex items-center gap-2 px-3 py-2 rounded-full border text-xs font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
-                    selectedTopic === topic.title
+                  className={`group flex items-center gap-2 px-3 py-2 rounded-full border text-xs font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] ${
+                    selectedTopic?.title === topic.title
                       ? "ig-gradient border-transparent text-white"
                       : "border-orange-500/30 text-foreground hover:border-orange-500/60 hover:bg-orange-500/10"
                   }`}
                 >
-                  {generatingType && selectedTopic === topic.title
-                    ? <Loader2 className="h-3 w-3 animate-spin" />
-                    : <span className="text-orange-400 group-hover:text-orange-300">🔥</span>
-                  }
-                  <span className="max-w-[150px] truncate">{topic.title}</span>
+                  <span className="text-orange-400 group-hover:text-orange-300">🔥</span>
+                  <span className="max-w-[320px] text-left whitespace-normal leading-snug">{topic.title}</span>
                   <span className="text-[9px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">{topic.region}</span>
                 </button>
               ))}
             </div>
           )}
-          {selectedTopic && !generatingType && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="text-xs text-muted-foreground">Generate {selectedTopic} as:</span>
-              {(["image", "carousel", "reels"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => handleGenerate(t, selectedTopic)}
-                  disabled={!!generatingType}
-                  className="text-xs px-3 py-1 rounded-full border border-primary/30 text-primary hover:bg-primary/10 transition-colors"
-                >
-                  {t === "image" ? "📷 Post" : t === "carousel" ? "🖼 Carousel" : "🎬 Reel"}
+          {selectedTopic && (
+            <div className="mt-4 rounded-xl border border-orange-500/20 bg-background/60 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-foreground">{selectedTopic.title}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-orange-400 font-semibold mt-0.5">{selectedTopic.region}</p>
+                </div>
+                <button onClick={() => setSelectedTopic(null)} className="text-xs text-muted-foreground hover:text-foreground">
+                  clear
                 </button>
-              ))}
-              <button onClick={() => setSelectedTopic(null)} className="text-xs text-muted-foreground hover:text-foreground">
-                ✕ clear
-              </button>
+              </div>
+              <p className="text-xs leading-6 text-muted-foreground">{selectedTopic.contentAngle}</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-lg border border-border/60 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Search Evidence</p>
+                  <p className="text-xs text-foreground/80">{selectedTopic.searchQuery}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Visual Direction</p>
+                  <p className="text-xs text-foreground/80">{selectedTopic.imageQuery}</p>
+                </div>
+              </div>
+              {!!selectedTopic.hashtags?.length && (
+                <p className="text-xs text-primary/70 font-mono break-words">{selectedTopic.hashtags.join(" ")}</p>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setCustomNiche(selectedTopic.title);
+                  toast({ title: "Niche copied", description: "Review it, then save if you want captions to use it." });
+                }}
+                className="rounded-lg text-xs"
+              >
+                Use as niche draft
+              </Button>
             </div>
           )}
         </div>
@@ -288,9 +360,9 @@ export function Dashboard() {
 
       {/* Generate Buttons */}
       <div className="grid grid-cols-3 gap-3">
-        <GenerateButton onClick={() => handleGenerate("image")} loading={generatingType === "image" && !selectedTopic} disabled={!!generatingType} icon={<ImageIcon className="h-4 w-4" />} label="Post" gradient="from-pink-600 via-rose-500 to-orange-500" />
-        <GenerateButton onClick={() => handleGenerate("reels")} loading={generatingType === "reels" && !selectedTopic} disabled={!!generatingType} icon={<Film className="h-4 w-4" />} label="Reel" gradient="from-violet-600 via-purple-600 to-pink-600" />
-        <GenerateButton onClick={() => handleGenerate("carousel")} loading={generatingType === "carousel" && !selectedTopic} disabled={!!generatingType} icon={<Layout className="h-4 w-4" />} label="Carousel" gradient="from-amber-500 via-orange-500 to-rose-500" />
+        <GenerateButton onClick={() => handleGenerate("image")} loading={generatingType === "image"} disabled={!!generatingType} icon={<ImageIcon className="h-4 w-4" />} label="Post" gradient="from-pink-600 via-rose-500 to-orange-500" />
+        <GenerateButton onClick={() => handleGenerate("reels")} loading={generatingType === "reels"} disabled={!!generatingType} icon={<Film className="h-4 w-4" />} label="Reel" gradient="from-violet-600 via-purple-600 to-pink-600" />
+        <GenerateButton onClick={() => handleGenerate("carousel")} loading={generatingType === "carousel"} disabled={!!generatingType} icon={<Layout className="h-4 w-4" />} label="Carousel" gradient="from-amber-500 via-orange-500 to-rose-500" />
       </div>
 
       {/* Stats Row */}
@@ -430,8 +502,7 @@ export function Dashboard() {
                 </div>
                 <div className="text-center">
                   <p className="font-bold text-foreground">Generating {generatingType}…</p>
-                  {selectedTopic && <p className="text-xs text-orange-400 mt-1">🔥 {selectedTopic}</p>}
-                  <p className="text-xs text-muted-foreground mt-1">Fetching trending content</p>
+                  <p className="text-xs text-muted-foreground mt-1">Using saved niche: {config?.niche || "India Instagram trends"}</p>
                 </div>
               </div>
             )}
@@ -467,11 +538,23 @@ export function Dashboard() {
                 isSaving={updatePost.isPending}
                 isPublishing={publishPost.isPending}
                 isRegeneratingCaption={regeneratingId === post.id}
+                onOpenPreview={() => setPreviewPost(post)}
               />
             ))}
           </div>
         )}
       </div>
+
+      {previewPost && (
+        <PostPreviewModal
+          post={previewPost}
+          onClose={() => setPreviewPost(null)}
+          onEdit={() => {
+            startEditing(previewPost);
+            setPreviewPost(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -493,7 +576,7 @@ function GenerateButton({ onClick, loading, disabled, icon, label, gradient }: a
   );
 }
 
-function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject, onPublish, onRegenerateCaption, editState, isSaving, isPublishing, isRegeneratingCaption }: any) {
+function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject, onPublish, onRegenerateCaption, editState, isSaving, isPublishing, isRegeneratingCaption, onOpenPreview }: any) {
   const [slide, setSlide] = useState(0);
   const slides = post.mediaType === "carousel" && post.mediaUrls?.length >= 2 ? post.mediaUrls : post.mediaType === "carousel" && post.mediaUrls?.length === 1 ? [post.mediaUrls[0], post.mediaUrls[0]] : [post.imageUrl];
 
@@ -511,7 +594,9 @@ function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject
           <img
             src={slides[slide]}
             alt={post.caption}
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+            className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-[1.02]"
+            loading="lazy"
+            referrerPolicy="no-referrer"
             onError={(e) => { (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop"; }}
           />
         ) : (
@@ -548,6 +633,14 @@ function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject
         <div className="absolute top-3 right-3 z-10">
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border backdrop-blur-sm ${statusCls}`}>{statusLabel}</span>
         </div>
+
+        <button
+          onClick={onOpenPreview}
+          className="absolute bottom-3 right-3 z-10 h-8 w-8 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center border border-white/10 hover:bg-primary transition-colors"
+          title="Open full preview"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </button>
 
         <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5">
           <Clock className="h-3 w-3 text-white/70" />
@@ -628,6 +721,94 @@ function PostCard({ post, editing, onEdit, onCancel, onSave, onApprove, onReject
               )}
             </>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PostPreviewModal({ post, onClose, onEdit }: any) {
+  const [slide, setSlide] = useState(0);
+  const slides = post.mediaType === "carousel" && post.mediaUrls?.length >= 2 ? post.mediaUrls : [post.imageUrl];
+  const canSlide = post.mediaType === "carousel" && slides.length > 1;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md p-3 sm:p-6 flex items-center justify-center" onClick={onClose}>
+      <div
+        className="w-full max-w-6xl max-h-[94vh] overflow-hidden rounded-2xl border border-white/10 bg-card shadow-2xl grid lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="relative min-h-[48vh] lg:min-h-[82vh] bg-black flex items-center justify-center">
+          {post.mediaType === "reels" && post.videoUrl ? (
+            <video src={post.videoUrl} className="h-full max-h-[82vh] w-full object-contain" controls autoPlay loop playsInline />
+          ) : (
+            <img
+              src={slides[slide]}
+              alt={post.caption}
+              className="h-full max-h-[82vh] w-full object-contain"
+              referrerPolicy="no-referrer"
+            />
+          )}
+
+          {canSlide && (
+            <>
+              <button
+                onClick={() => setSlide((p) => (p > 0 ? p - 1 : slides.length - 1))}
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/60 text-white flex items-center justify-center border border-white/10 hover:bg-primary"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <button
+                onClick={() => setSlide((p) => (p < slides.length - 1 ? p + 1 : 0))}
+                className="absolute right-3 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/60 text-white flex items-center justify-center border border-white/10 hover:bg-primary"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+              <div className="absolute bottom-4 inset-x-0 flex justify-center gap-1.5">
+                {slides.map((_: string, i: number) => (
+                  <button key={i} onClick={() => setSlide(i)} className={`h-1.5 rounded-full ${i === slide ? "w-7 bg-white" : "w-2 bg-white/40"}`} />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="min-h-0 max-h-[94vh] overflow-y-auto p-5 sm:p-6 space-y-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="outline" className="uppercase text-[10px]">{post.mediaType}</Badge>
+                <Badge variant="outline" className="uppercase text-[10px]">{post.status}</Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Scheduled {format(new Date(post.scheduledFor), "MMM d, h:mm a")}
+              </p>
+            </div>
+            <button onClick={onClose} className="h-9 w-9 rounded-full border border-white/10 flex items-center justify-center hover:bg-white/10">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Caption</p>
+            <p className="whitespace-pre-wrap text-sm leading-7 text-foreground/90">{post.caption}</p>
+          </div>
+
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Hashtags</p>
+            <p className="text-sm leading-7 text-primary/80 font-mono break-words">{post.hashtags}</p>
+          </div>
+
+          {post.imagePrompt && (
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Visual Prompt</p>
+              <p className="text-xs leading-6 text-muted-foreground">{post.imagePrompt}</p>
+            </div>
+          )}
+
+          <Button onClick={onEdit} className="w-full rounded-xl ig-gradient border-0 text-white">
+            <Edit3 className="h-4 w-4 mr-2" /> Edit caption
+          </Button>
         </div>
       </div>
     </div>

@@ -25,6 +25,11 @@ const UpdateConfigBody = z.object({
   imageSource: z.enum(["ai", "search"]).optional(),
 });
 
+function isLegacyDefaultNiche(niche: string): boolean {
+  const value = niche.toLowerCase();
+  return value === "fitness" || value.includes("tamil nadu business");
+}
+
 async function exchangeAndSave(
   shortLivedToken: string,
   appId: string,
@@ -92,7 +97,7 @@ async function exchangeAndSave(
   const [existing] = await db.select().from(configTable).limit(1);
   if (!existing) {
     await db.insert(configTable).values({
-      niche: "Tamil Nadu Business & Success",
+      niche: "India Instagram trends",
       morningPostTime: "08:00",
       afternoonPostTime: "12:00",
       eveningPostTime: "16:00",
@@ -156,7 +161,7 @@ router.post("/config/save-credentials", async (req, res) => {
   const [existing] = await db.select().from(configTable).limit(1);
   if (!existing) {
     await db.insert(configTable).values({
-      niche: "Tamil Nadu Business & Success",
+      niche: "India Instagram trends",
       morningPostTime: "08:00",
       afternoonPostTime: "12:00",
       eveningPostTime: "16:00",
@@ -427,7 +432,7 @@ router.get("/config", async (req, res) => {
     [config] = await db
       .insert(configTable)
       .values({
-        niche: "Tamil Nadu Business, Entrepreneurship & Success — Motivational content about financial freedom, local business success stories, Tamil entrepreneurs, startup culture in Chennai/Coimbatore, election & civic awareness, IPL cricket motivation, and everyday life wisdom for Tamil youth",
+        niche: "India Instagram trends",
         morningPostTime: "08:00",
         afternoonPostTime: "12:00",
         eveningPostTime: "16:00",
@@ -438,8 +443,13 @@ router.get("/config", async (req, res) => {
         autoApprove: false,
         instagramAccountId: "",
         metaAccessToken: "",
-        imageSource: "ai",
+        imageSource: "search",
       })
+      .returning();
+  } else if (isLegacyDefaultNiche(config.niche)) {
+    [config] = await db
+      .update(configTable)
+      .set({ niche: "India Instagram trends", imageSource: "search", updatedAt: new Date() })
       .returning();
   }
 
@@ -456,7 +466,7 @@ router.put("/config", async (req, res) => {
       .insert(configTable)
       .values({
         ...body,
-        niche: body.niche || "Tamil Nadu Business & Success",
+        niche: body.niche || "India Instagram trends",
         morningPostTime: body.morningPostTime || "08:00",
         afternoonPostTime: body.afternoonPostTime || "12:00",
         eveningPostTime: body.eveningPostTime || "16:00",
@@ -467,6 +477,7 @@ router.put("/config", async (req, res) => {
         autoApprove: body.autoApprove ?? false,
         instagramAccountId: body.instagramAccountId || "",
         metaAccessToken: body.metaAccessToken || "",
+        imageSource: body.imageSource || "search",
       })
       .returning();
   } else {
